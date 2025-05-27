@@ -6,6 +6,12 @@ class IPTVDatabase:
         self.conn = sqlite3.connect(Settings.Settings.db_path)
         self.create_tables()
 
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+    
     def create_tables(self):
         self.conn.execute("""
             CREATE TABLE IF NOT EXISTS urls (
