@@ -89,6 +89,17 @@ class IPTVDatabase:
         return cursor.fetchall()
 
 
+    # get all urls where is not MAC with status = 'SUCCESS'
+    def get_urls_without_working_mac(self):
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT urls.url
+            FROM urls
+            LEFT JOIN macs ON urls.id = macs.url_id AND macs.status = 'SUCCESS'
+            WHERE macs.id IS NULL
+        """)
+        return [row[0] for row in cursor.fetchall()]
+
     # Get for each URL the newest MAC with status = 1
     def get_newest_working_mac_by_url(self):
         cursor = self.conn.cursor()

@@ -2,8 +2,12 @@ import logging
 from Library.Sqllite import IPTVDatabase
 
 logging.basicConfig(filename="working_macs.log", level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', filemode='w')
+#logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 db = IPTVDatabase()
+
+logging.info("Fetching newest working MACs from the database...")
+logging.info("------------------------------------------------")
 
 working_macs = db.get_newest_working_mac_by_url()
 
