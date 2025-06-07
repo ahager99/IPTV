@@ -4,7 +4,8 @@ import subprocess
 from urllib.parse import quote, urlparse, urlunparse
 
 import requests
-from Library import IPTVDatabase
+from Library import IPTVDatabase, STK_Server, VLCPlayer, STATUS, EPG
+
 
 import logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -76,9 +77,11 @@ def test_vlc_stream(url, timeout=10):
             "main error", "cannot open", "Your input can't be opened", "no suitable access module"
         ]
         if any(keyword.lower() in errs.lower() for keyword in error_keywords):
+            logging.error(f"Erros when launch VLC for stream: {url}")
             return False
         return True
     except Exception as e:
+        logging.error(f"Launching VLC for stream failed: {url}")
         return False
 
 def is_stream_url_playable(url):
@@ -88,7 +91,7 @@ def is_stream_url_playable(url):
             content_type = response.headers.get('Content-Type', '')
             # Check for common stream types
             if any(ct in content_type for ct in [
-                'video', 'audio', 'application/vnd.apple.mpegurl', 'application/x-mpegURL'
+                'video', 'audio', 'application/vnd.apple.mpegurl', 'application/x-mpegURL', 'appplication/octet-stream'
             ]):
                 return True
         # Some servers may not support HEAD, try GET as fallback
@@ -96,11 +99,12 @@ def is_stream_url_playable(url):
         if response.status_code == 200:
             content_type = response.headers.get('Content-Type', '')
             if any(ct in content_type for ct in [
-                'video', 'audio', 'application/vnd.apple.mpegurl', 'application/x-mpegURL'
+                'video', 'audio', 'application/vnd.apple.mpegurl', 'application/x-mpegURL', 'appplication/octet-stream'
             ]):
                 return True
     except Exception as e:
         pass
+
     return False
 
 def launch_media_player(stream_url):
@@ -114,12 +118,38 @@ def launch_media_player(stream_url):
         if stream_url.lower().startswith(prefix.lower()):
             stream_url = stream_url[len(prefix):].strip()
 
+
+    result2 = False
+
     # Log the final URL
     logging.debug(f"Launching media player with cleaned URL: {stream_url}")
 
+    # Check if VLC can play the stream
+    with VLCPlayer(stream_url) as vlc_player_instance:
+        vlc_player_instance.play()
+        for i in range(20):
+            is_playing = vlc_player_instance.is_playing()
+            playback_failed = vlc_player_instance.playback_failed()
+            if is_playing or playback_failed:
+                logging.debug(f"VLC playback status: is_playing={is_playing}, playback_failed={playback_failed}")
+                break
+            else:
+                logging.debug(f"Waiting for VLC to start playing the stream: {stream_url} (attempt {i+1})")
+                time.sleep(1)
+        
+        result = vlc_player_instance.is_playing()
+        if result:
+            logging.debug(f"VLC is playing the stream: {stream_url}")
+            vlc_player_instance.stop()
+        else:
+            logging.debug(f"VLC is not playing the stream, attempting to play: {stream_url}")
+            
+#    result2 = test_vlc_stream(stream_url)
+#    if result2 != result:
+#        logging.error(f"VLC different results")
+#        return False
 
-    return test_vlc_stream(stream_url)
-
+    return result
 
 def checkServer(hostname, mac_address):
     
@@ -139,7 +169,7 @@ def checkServer(hostname, mac_address):
     token_timestamp = time.time()
 
     if not token:
-        return "LOGIN", "Failed to retrieve token. Check MAC/URL.", None, None
+        return IPTVDatabase.STATUS_LOGIN, "Failed to retrieve token. Check MAC/URL.", None, None
 
     cookies = {
                 "mac": mac_address,
@@ -161,7 +191,7 @@ def checkServer(hostname, mac_address):
         response_profile.raise_for_status()
         profile_data = response_profile.json()
     except Exception as e:
-        return "ERROR", f"Error fetching profile: {e}", None, None
+        return IPTVDatabase.STATUS_ERROR, f"Error fetching profile: {e}", None, None
 
     try:
         account_info_url = f"{base_url}/portal.php?type=account_info&action=get_main_info&JsHttpRequest=1-xml"
@@ -169,7 +199,7 @@ def checkServer(hostname, mac_address):
         response_account_info.raise_for_status()
         account_info_data = response_account_info.json()
     except Exception as e:
-        return "ERROR", f"Error fetching account info: {e}", None, None
+        return IPTVDatabase.STATUS_ERROR, f"Error fetching account info: {e}", None, None
 
 
     # Get live genres
@@ -203,18 +233,18 @@ def checkServer(hostname, mac_address):
                     adult_genres.append(genre)
             logging.debug(f"Genres found: {genre_text}")
         else:
-            return "CONTENT", "No genres data found.", None, None
+            return IPTVDatabase.STATUS_CONTENT, "No genres data found.", None, None
     except Exception as e:
-        return "ERROR", f"Error getting genres: {e}", None, None
+        return IPTVDatabase.STATUS_ERROR, f"Error getting genres: {e}", None, None
 
 
     for i in range(5):
         if len(german_genres) > 0:
             random_index = random.randint(0, len(german_genres) - 1)
             genre = german_genres[random_index]
-#        elif len(adult_genres) > 0:
-#            random_index = random.randint(0, len(adult_genres) - 1)
-#            genre = adult_genres[random_index]
+        elif len(adult_genres) > 0:
+            random_index = random.randint(0, len(adult_genres) - 1)
+            genre = adult_genres[random_index]
         else:
             random_index = random.randint(0, len(genres) - 1)
             genre = genres[random_index]
@@ -289,7 +319,7 @@ def checkServer(hostname, mac_address):
                                 token = get_token(session, url, mac_address)
                                 token_timestamp = time.time()
                                 if not token:
-                                    return "TOKEN", "Failed to retrieve token. Please check your MAC address and URL.", None, None
+                                    return IPTVDatabase.STATUS_TOKEN, "Failed to retrieve token. Please check your MAC address and URL.", None, None
                                     
                             cmd_encoded = quote(cmd)
                             cookies = {
@@ -319,7 +349,7 @@ def checkServer(hostname, mac_address):
                                     cmd = cmd[6:].strip()
                                 stream_url = cmd_value
                                 if launch_media_player(stream_url):
-                                    return "SUCCESS", "Valid URL + MAC + working channels", len(german_genres) > 0, len(adult_genres) > 0 
+                                    return IPTVDatabase.STATUS_SUCCESS, "Valid URL + MAC + working channels", len(german_genres) > 0, len(adult_genres) > 0 
                             else:
                                 # Stream URL not found in the response.
                                 continue
@@ -332,56 +362,137 @@ def checkServer(hostname, mac_address):
                             cmd = cmd[len("ffmpeg "):]
                             
                         if launch_media_player(cmd):
-                            return "SUCCESS", "Valid URL + MAC + working channels", len(german_genres) > 0, len(adult_genres) > 0
+                            return IPTVDatabase.STATUS_SUCCESS, "Valid URL + MAC + working channels", len(german_genres) > 0, len(adult_genres) > 0
                 else:
                     # No channels found for this genre
-                    return "CONTENT", "No random channels data found.", None, None
+                    return IPTVDatabase.STATUS_CONTENT, "No random channels data found.", None, None
             else:
                 # No channels found for this genre
-                return "CONTENT", "No channels data found.", None, None
+                return IPTVDatabase.STATUS_CONTENT, "No channels data found.", None, None
 
         except Exception as e:
-            return "ERROR", f"An error occurred while retrieving channels: {str(e)}", None, None
+            return IPTVDatabase.STATUS_ERROR, f"An error occurred while retrieving channels: {str(e)}", None, None
 
-    return "CONTENT", "No working channels found.", None, None
+    return IPTVDatabase.STATUS_CONTENT, "No working channels found.", None, None
 
 
 
-db = IPTVDatabase()
+# db = IPTVDatabase()
 
-# Get all URLs from the database
-urls = db.get_all_urls()
+# # Get all URLs from the database
+# urls = db.get_all_urls()
 
-# Iterate through each URL and fetch its MACs
-logging.info(f"Found {len(urls)} URLs in the database.")
-urlCounter = 0
-for url in urls:
-    urlCounter += 1
-    macs = db.get_all_not_failed_macs_by_url(url)
+# # Iterate through each URL and fetch its MACs
+# logging.info(f"Found {len(urls)} URLs in the database.")
+# urlCounter = 0
+# for url in urls:
+#     urlCounter += 1
+#     macs = db.get_all_macs_by_url(url)	
     
-    # Print the URL and its MACs
-    logging.info(f"Processing URL [{urlCounter}/{len(urls)}]: '{url}' with {len(macs)} unprocessed / success / skipped / error MACs")
-    counter = 0
-    success = ""
-    for id, mac, expiration, status, error, german, adult in macs:
-        counter += 1
-        # Skip if MAC is already working
-        if success == "SUCCESS":
-            logging.info(f"[{counter}/{len(macs)}] Skipping already working MAC: {mac} for URL: {url}")
-            db.update_mac_status(id, "SKIPPED", "")
-        else:
-            success, message, german, adult = checkServer(url, mac)
-            logging.info(f"[{counter}/{len(macs)}] MAC: {mac}, Expiration: {expiration}, Status: {success}, Message: {message}")
+#     # Print the URL and its MACs
+#     logging.info(f"Processing URL [{urlCounter}/{len(urls)}]: '{url}' with {len(macs)} unprocessed / success / skipped / error MACs")
+#     counter = 0
+#     success = ""
+#     for id, mac, expiration, status, error, german, adult in macs:
+#         counter += 1
+#         # Skip if MAC is already working
+#         if success == IPTVDatabase.STATUS_SUCCESS:
+#             logging.info(f"[{counter}/{len(macs)}] Skipping already working MAC: {mac} for URL: {url}")
+#             db.update_mac_status(id, IPTVDatabase.STATUS_SKIPPED, "")
+#         else:
+#             success, message, german, adult = checkServer(url, mac)
+#             logging.info(f"[{counter}/{len(macs)}] MAC: {mac}, Expiration: {expiration}, Status: {success}, Message: {message}")
 
-            db.update_mac_status(id, success, message, german, adult)
+#             db.update_mac_status(id, success, message, german, adult)
 
-            # if success then process next url as we only need one working MAC per URL
-            if success == "SUCCESS":
-                logging.info(f"Working MAC found: {mac} for URL: {url}")
+#             # if success then process next url as we only need one working MAC per URL
+#             if success == IPTVDatabase.STATUS_SUCCESS:
+#                 logging.info(f"Working MAC found: {mac} for URL: {url}")
 
         
-    logging.info("")  # Newline for better readability
+#     logging.info("")  # Newline for better readability
 
 
 
-db.close()
+def main():
+
+    with IPTVDatabase() as db, EPG() as epg:
+        # Get all URLs from the database
+        urls = db.get_all_urls()
+
+        # Iterate through each URL and fetch its MACs
+        logging.info(f"Found {len(urls)} URLs in the database.")
+        urlCounter = 0
+        for url in urls:
+            urlCounter += 1
+            if urlCounter < 8:
+                continue
+            macs = db.get_all_not_failed_macs_by_url(url)	
+            
+            # Print the URL and its MACs
+            logging.info(f"Processing URL [{urlCounter}/{len(urls)}]: '{url}' with {len(macs)} unprocessed / success / skipped / error MACs")
+            macCounter = 0
+            success = ""
+            for id, mac, expiration, status, error, german, adult in macs:
+                macCounter += 1
+                # Skip if MAC is already working
+                if success == STATUS.SUCCESS:
+                    logging.info(f"[{macCounter}/{len(macs)}] Skipping already working MAC: {mac} for URL: {url}")
+                    db.update_mac_status(id, IPTVDatabase.SKIPPED, "")
+                else:
+                    
+                    with STK_Server(url, mac) as server:
+                        login_status, status_message = server.login()
+                        if login_status == STATUS.SUCCESS:
+                            logging.info(f"Successfully logged in with MAC: {mac} for URL: {url}")
+                            status, message, genres = server.get_genres()
+                            if status == STATUS.SUCCESS:
+                                genreCounter = 0
+                                for genre in genres:
+                                    genreCounter += 1
+                                    if genre.is_relevant():
+                                        logging.info(f"[{genreCounter}/{len(genres)}] Processing genre '{genre.name}'...") 
+
+                                        # get channels for the genre
+                                        status, message, channels = genre.get_channels()
+                                        if status == STATUS.SUCCESS:
+                                            channelCounter = 0
+                                            for channel in channels:
+                                                channelCounter += 1
+                                                logging.info("------------------------------------------------")
+                                                logging.info(f"[{channelCounter}/{len(channels)}] Channel '{channel.name}'.....")
+                                                status, message = channel.validate_url()
+                                                if status == STATUS.SUCCESS:
+                                                    logging.info(f"Channel is valid.")
+                                                    # Here you can add logic to process the channel further
+                                                    epg_name, epg_display_name, epg_logo = epg.find_best_channel_id_match(channel.name, 89)
+                                                    if epg_name:
+                                                            logging.info(f"EPG name: {epg_name}")
+                                                    else:
+                                                            logging.info(f"No EPG matching")
+                                                else:
+                                                    logging.info(f"Channel validation failed: {message}")
+                                        else:
+                                            logging.error(f"Failed to get channels for genre '{genre.name}': {message}")                               
+                                    else:
+                                        logging.info(f"[{genreCounter}/{len(genres)}] Skipped genre '{genre.name}'")
+                            else:
+                                logging.warning(f"No genres found for MAC: {mac} on URL: {url}")
+                        else:
+                            logging.error(f"Login failed for MAC: {mac} on URL: {url}. Status: {login_status}, Message: {status_message}")
+                            #db.update_mac_status(id, IPTVDatabase.STATUS_LOGIN, status_message)
+                    
+                    #success, message, german, adult = checkServer(url, mac)
+                    #logging.info(f"[{counter}/{len(macs)}] MAC: {mac}, Expiration: {expiration}, Status: {success}, Message: {message}")
+
+                    # db.update_mac_status(id, success, message, german, adult)
+
+                    # # if success then process next url as we only need one working MAC per URL
+                    # if success == IPTVDatabase.STATUS_SUCCESS:
+                    #     logging.info(f"Working MAC found: {mac} for URL: {url}")
+
+                
+            logging.info("")  # Newline for better readability
+
+if __name__ == "__main__":
+    main()

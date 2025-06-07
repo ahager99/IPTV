@@ -21,18 +21,34 @@ def read_mac_entries_from_file(filepath):
             logging.warning(f"Could not parse block starting at line {i+1}: {e}")
     return entries
 
-def main():
+def main(new_url_macs):
     mac_entries = read_mac_entries_from_file(r"D:\Tools\MacAttack_build\MacAttackOutput.txt")
 
     with IPTVDatabase() as db:
         for url, mac, expiration in mac_entries:
             if db.get_mac_id(url, mac):
-                logging.info(f"EXISTS: {url} - {mac}")
+                #logging.info(f"EXISTS: {url} - {mac}")
+                continue
+            db.insert_mac(url, mac, expiration, None, None)
+            logging.info(f"ADDED: {url} - {mac} - {expiration}")
+
+        for entry in new_url_macs:
+            url = entry["url"]
+            mac = entry["mac"]
+            expiration = entry["expiration"]
+            if db.get_mac_id(url, mac):
+                #logging.info(f"EXISTS: {url} - {mac}")
                 continue
             db.insert_mac(url, mac, expiration, None, None)
             logging.info(f"ADDED: {url} - {mac} - {expiration}")
 
 if __name__ == "__main__":
-    main()
+    
+    new_url_macs = [{"url": "http://violetta.cfd:8080/c", "mac": "00:1A:79:41:E5:C7", "expiration": None},
+                   {"url": "http://m.devtv.biz/c/", "mac": "00:1A:79:59:7B:28", "expiration": None},
+                   {"url": "http://mutant.arrox.top/c", "mac": "00:1A:79:F5:73:0F", "expiration": None},
+                   {"url": "http://slayerteam.in.rs:80/c/", "mac": "00:1A:79:e7:4b:71", "expiration": None}]
+
+    main(new_url_macs)
 
 
