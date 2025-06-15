@@ -11,7 +11,7 @@ from thefuzz import process
 
 
 
-class EPG:
+class EPG_Server:
 
     def __init__(self):
         self.channels = self.__parse_urls()
@@ -24,29 +24,33 @@ class EPG:
 
 
     def __parse_channels(self, xml_content):
-        channels = []
+        unique_channels = {}
         try:
             root = ET.fromstring(xml_content)
             
             for channel in root.findall('channel'):
                 channel_id = channel.get('id')
+                if unique_channels.get(channel_id):
+                    continue
+                
                 display_name = channel.findtext('display-name')
                 icons = [icon.get('src') for icon in channel.findall('icon')]
                 icon = icons[0] if icons else None
                 url = channel.findtext('url')
-                channels.append({
+                unique_channels[channel_id] = {
                     'id': channel_id,
                     'display_name': display_name,
                     'icon': icon,
                     'url': url
-                })
+                }
         except Exception as e:
+            logging.error(f"Error parsing channels: {e}")
             pass
-        return channels
+        return unique_channels
     
 
     def __parse_urls(self):
-        channels = []
+        channels = {}
         
         for url in Settings.EPG_URLS:
             logging.info(f"Processing EPG-URL: {url}")
@@ -60,7 +64,8 @@ class EPG:
                 else:
                     content = response.content
 
-                channels.extend(self.__parse_channels(content))
+                parsed_channels = self.__parse_channels(content)
+                channels.update(parsed_channels)
 
             except requests.RequestException as e:
                 logging.error(f"Error fetching EPG {url}: {e}")
@@ -69,19 +74,8 @@ class EPG:
         if not channels:
             logging.error("No channels found in EPG data.")
             return None
-
-        channel_ids = [(ch['id'], ch) for ch in channels]
-        channels_dict = dict(channel_ids)
-        # remove duplicates from channels_dict
-        seen = set()
-        for channel_id, channel in list(channels_dict.items()):
-            if channel_id in seen:
-                logging.warning(f"Duplicate channel ID found: {channel_id}. Removing duplicate.")
-                del channels_dict[channel_id]
-            else:
-                seen.add(channel_id)
-
-        return channels_dict
+        
+        return channels
         
 
 

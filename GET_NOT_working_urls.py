@@ -1,9 +1,9 @@
 import logging
-from Library.Sqllite import IPTVDatabase
+from Library.Sqllite import IPTV_Database
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-db = IPTVDatabase()
+db = IPTV_Database()
 
 logging.info("Fetching not working URLs from the database...")
 logging.info("------------------------------------------------")

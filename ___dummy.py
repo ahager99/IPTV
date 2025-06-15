@@ -1,8 +1,8 @@
 # add new column error to table macs
-from Library.Sqllite import IPTVDatabase
+from Library.Sqllite import IPTV_Database
 
 
-db = IPTVDatabase()
+db = IPTV_Database()
 db.conn.execute("""
     UPDATE macs SET failed = 0
 """)    

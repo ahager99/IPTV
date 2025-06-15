@@ -90,7 +90,7 @@ class STK_Channel:
         return False
     
 
-    def __get_real_stream_url(self):
+    def __load_real_stream_url(self):
         logging.debug("Fetching real url...")
         if not self.channel_url:
             self.real_url = None
@@ -110,7 +110,7 @@ class STK_Channel:
                 for resp in response.history:
                     logging.debug(" →", resp.url)
                 logging.debug("[*] Final URL:", response.url)
-                self.real_url = response.url
+                self.real_url = response.url.strip()
                 return STATUS.SUCCESS, ""
 
             # Step 3: Check for URL in the content (e.g., m3u8, mpd, etc.)
@@ -120,7 +120,7 @@ class STK_Channel:
                 urls = re.findall(r'(https?://[^\s"\']+\.m3u8)', response.text)
                 if urls:
                     logging.debug("[*] Stream URL found in response body")
-                    self.real_url = urls[0]
+                    self.real_url = urls[0].strip()
                     return STATUS.SUCCESS, ""
 
             logging.debug("[!] Could not find real stream URL in headers or body")
@@ -133,23 +133,33 @@ class STK_Channel:
             return STATUS.ERROR, f"Error at fetching real stream URL: {e}"
     
 
-    def validate_url(self):
-
+    def get_url(self):
         # Get the channel url - preferred the real url or if not possible the url stored in channel
         if self.real_url:
-            stream_url = self.real_url.strip()
+            stream_url = self.real_url
         else:
             if not self.channel_url:
-                status, message = self.get_stream_url()
+                status, message = self.load_stream_url()
                 if status != STATUS.SUCCESS:
-                    return status, message
+                    return status, message, None
         
-            status, message = self.__get_real_stream_url()
+            status, message = self.__load_real_stream_url()
             if status == STATUS.SUCCESS:
-                stream_url = self.real_url.strip()  # Remove extra spaces
+                stream_url = self.real_url  # Remove extra spaces
             else:
                 stream_url = self.channel_url.strip()
+        
+        return STATUS.SUCCESS, "", stream_url
 
+
+
+    def validate_url(self):
+
+        # get the stream URL
+        status, message, stream_url = self.get_url()
+        if status != STATUS.SUCCESS:
+            return status, message
+        
         # List of known prefixes to strip
         known_prefixes = ["ffmpeg ", "ffrt3 "]  # Add any other prefixes here
 
@@ -164,6 +174,7 @@ class STK_Channel:
 
         # Log the final URL
         logging.info(f"Channel URL: {self.channel_url}")
+        logging.info(f"Real URL: {self.real_url}")
         logging.info(f"Launching media player with cleaned URL: {stream_url}")
 
         # Check if VLC can play the stream
@@ -188,7 +199,7 @@ class STK_Channel:
 
 
 
-    def get_stream_url(self):
+    def load_stream_url(self):
         cmd = self.cmd
         if not cmd:
             # No command found for channel/episode

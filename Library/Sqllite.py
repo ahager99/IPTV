@@ -2,7 +2,7 @@ import sqlite3
 
 from Library.Settings import STATUS, Settings
 
-class IPTVDatabase:
+class IPTV_Database:
 
     def __init__(self):
         self.conn = sqlite3.connect(Settings.DB_PATH)
@@ -34,6 +34,29 @@ class IPTVDatabase:
                 failed INTEGER DEFAULT 0,
                 FOREIGN KEY(url_id) REFERENCES urls(id),
                 UNIQUE(url_id, mac)
+            )
+        """)
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS channels (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                mac_id INTEGER,
+                stream_id INTEGER,
+                name TEXT,
+                logo TEXT,
+                german BOOLEAN,
+                adult BOOLEAN, 
+                austrian BOOLEAN,
+                FOREIGN KEY(mac_id) REFERENCES macs(id),
+                FOREIGN KEY(stream_id) REFERENCES streams(id),
+                UNIQUE(mac_id, name)
+            )
+        """)
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS streams (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                url TEXT,
+                failed INTEGER DEFAULT 0,
+                UNIQUE(url)
             )
         """)
         self.conn.commit()

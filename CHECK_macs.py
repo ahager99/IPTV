@@ -4,7 +4,7 @@ import subprocess
 from urllib.parse import quote, urlparse, urlunparse
 
 import requests
-from Library import IPTVDatabase, STK_Server, VLCPlayer, STATUS, EPG
+from Library import IPTV_Database, STK_Server, VLCPlayer, STATUS, EPG_Server
 
 
 import logging
@@ -169,7 +169,7 @@ def checkServer(hostname, mac_address):
     token_timestamp = time.time()
 
     if not token:
-        return IPTVDatabase.STATUS_LOGIN, "Failed to retrieve token. Check MAC/URL.", None, None
+        return IPTV_Database.STATUS_LOGIN, "Failed to retrieve token. Check MAC/URL.", None, None
 
     cookies = {
                 "mac": mac_address,
@@ -191,7 +191,7 @@ def checkServer(hostname, mac_address):
         response_profile.raise_for_status()
         profile_data = response_profile.json()
     except Exception as e:
-        return IPTVDatabase.STATUS_ERROR, f"Error fetching profile: {e}", None, None
+        return IPTV_Database.STATUS_ERROR, f"Error fetching profile: {e}", None, None
 
     try:
         account_info_url = f"{base_url}/portal.php?type=account_info&action=get_main_info&JsHttpRequest=1-xml"
@@ -199,7 +199,7 @@ def checkServer(hostname, mac_address):
         response_account_info.raise_for_status()
         account_info_data = response_account_info.json()
     except Exception as e:
-        return IPTVDatabase.STATUS_ERROR, f"Error fetching account info: {e}", None, None
+        return IPTV_Database.STATUS_ERROR, f"Error fetching account info: {e}", None, None
 
 
     # Get live genres
@@ -233,9 +233,9 @@ def checkServer(hostname, mac_address):
                     adult_genres.append(genre)
             logging.debug(f"Genres found: {genre_text}")
         else:
-            return IPTVDatabase.STATUS_CONTENT, "No genres data found.", None, None
+            return IPTV_Database.STATUS_CONTENT, "No genres data found.", None, None
     except Exception as e:
-        return IPTVDatabase.STATUS_ERROR, f"Error getting genres: {e}", None, None
+        return IPTV_Database.STATUS_ERROR, f"Error getting genres: {e}", None, None
 
 
     for i in range(5):
@@ -319,7 +319,7 @@ def checkServer(hostname, mac_address):
                                 token = get_token(session, url, mac_address)
                                 token_timestamp = time.time()
                                 if not token:
-                                    return IPTVDatabase.STATUS_TOKEN, "Failed to retrieve token. Please check your MAC address and URL.", None, None
+                                    return IPTV_Database.STATUS_TOKEN, "Failed to retrieve token. Please check your MAC address and URL.", None, None
                                     
                             cmd_encoded = quote(cmd)
                             cookies = {
@@ -349,7 +349,7 @@ def checkServer(hostname, mac_address):
                                     cmd = cmd[6:].strip()
                                 stream_url = cmd_value
                                 if launch_media_player(stream_url):
-                                    return IPTVDatabase.STATUS_SUCCESS, "Valid URL + MAC + working channels", len(german_genres) > 0, len(adult_genres) > 0 
+                                    return IPTV_Database.STATUS_SUCCESS, "Valid URL + MAC + working channels", len(german_genres) > 0, len(adult_genres) > 0 
                             else:
                                 # Stream URL not found in the response.
                                 continue
@@ -362,18 +362,18 @@ def checkServer(hostname, mac_address):
                             cmd = cmd[len("ffmpeg "):]
                             
                         if launch_media_player(cmd):
-                            return IPTVDatabase.STATUS_SUCCESS, "Valid URL + MAC + working channels", len(german_genres) > 0, len(adult_genres) > 0
+                            return IPTV_Database.STATUS_SUCCESS, "Valid URL + MAC + working channels", len(german_genres) > 0, len(adult_genres) > 0
                 else:
                     # No channels found for this genre
-                    return IPTVDatabase.STATUS_CONTENT, "No random channels data found.", None, None
+                    return IPTV_Database.STATUS_CONTENT, "No random channels data found.", None, None
             else:
                 # No channels found for this genre
-                return IPTVDatabase.STATUS_CONTENT, "No channels data found.", None, None
+                return IPTV_Database.STATUS_CONTENT, "No channels data found.", None, None
 
         except Exception as e:
-            return IPTVDatabase.STATUS_ERROR, f"An error occurred while retrieving channels: {str(e)}", None, None
+            return IPTV_Database.STATUS_ERROR, f"An error occurred while retrieving channels: {str(e)}", None, None
 
-    return IPTVDatabase.STATUS_CONTENT, "No working channels found.", None, None
+    return IPTV_Database.STATUS_CONTENT, "No working channels found.", None, None
 
 
 
@@ -416,7 +416,7 @@ def checkServer(hostname, mac_address):
 
 def main():
 
-    with IPTVDatabase() as db, EPG() as epg:
+    with IPTV_Database() as db, EPG_Server() as epg:
         # Get all URLs from the database
         urls = db.get_all_urls()
 
@@ -438,7 +438,7 @@ def main():
                 # Skip if MAC is already working
                 if success == STATUS.SUCCESS:
                     logging.info(f"[{macCounter}/{len(macs)}] Skipping already working MAC: {mac} for URL: {url}")
-                    db.update_mac_status(id, IPTVDatabase.SKIPPED, "")
+                    db.update_mac_status(id, IPTV_Database.SKIPPED, "")
                 else:
                     
                     with STK_Server(url, mac) as server:

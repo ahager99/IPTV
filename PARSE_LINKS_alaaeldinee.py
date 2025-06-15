@@ -3,7 +3,7 @@ import requests
 import re
 from datetime import datetime
 from bs4 import BeautifulSoup
-from Library import IPTVDatabase
+from Library import IPTV_Database
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -91,7 +91,7 @@ def main():
 
     logging.info(f"Extracted {len(all_results)} entries.")
 
-    with IPTVDatabase() as db:
+    with IPTV_Database() as db:
         for counter, entry in enumerate(all_results, 1):
             if db.get_mac_id(entry['url'], entry['mac']):
                 #logging.info(f"[{counter}/{len(all_results)}] EXISTS: {entry['url']} - {entry['mac']}")

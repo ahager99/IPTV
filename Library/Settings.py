@@ -16,9 +16,6 @@ class Settings:
 
 
     EPG_URLS = [
-    "https://www.open-epg.com/generate/Cgj6bBeeHA.xml",
-    "https://epgshare01.online/epgshare01/epg_ripper_DE1.xml.gz",
-    #"https://epgshare01.online/epgshare01/epg_ripper_ALL_SOURCES1.xml.gz",
     "https://www.open-epg.com/files/germany3.xml",
     "https://www.open-epg.com/files/germany1.xml",
     "https://www.open-epg.com/files/germany2.xml",
@@ -28,6 +25,9 @@ class Settings:
     "https://www.open-epg.com/files/austria2.xml",
     "https://www.open-epg.com/files/austria3.xml",
     "https://www.open-epg.com/files/austria4.xml",
+    "https://epgshare01.online/epgshare01/epg_ripper_ALL_SOURCES1.xml.gz",
+    "https://www.open-epg.com/generate/Cgj6bBeeHA.xml",
+    "https://epgshare01.online/epgshare01/epg_ripper_DE1.xml.gz",
     # Füge hier weitere URLs hinzu
 ]
 

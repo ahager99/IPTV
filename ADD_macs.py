@@ -1,6 +1,6 @@
 import logging
 from datetime import datetime
-from Library.Sqllite import IPTVDatabase
+from Library.Sqllite import IPTV_Database
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -24,7 +24,7 @@ def read_mac_entries_from_file(filepath):
 def main(new_url_macs):
     mac_entries = read_mac_entries_from_file(r"D:\Tools\MacAttack_build\MacAttackOutput.txt")
 
-    with IPTVDatabase() as db:
+    with IPTV_Database() as db:
         for url, mac, expiration in mac_entries:
             if db.get_mac_id(url, mac):
                 #logging.info(f"EXISTS: {url} - {mac}")
