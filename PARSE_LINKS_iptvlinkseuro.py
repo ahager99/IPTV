@@ -103,14 +103,20 @@ def main():
 
     logging.info(f"Extracted {len(all_results)} entries.")
 
+    skipped_count = 0
+    inserted_count = 0
     with IPTV_Database() as db:
         for counter, entry in enumerate(all_results, 1):
             if db.get_mac_id(entry['url'], entry['mac']):
                 #logging.info(f"[{counter}/{len(all_results)}] EXISTS: {entry['url']} - {entry['mac']}")
+                skipped_count += 1
                 continue
             logging.info(f"[{counter}/{len(all_results)}] INSERTING: {entry['url']} - {entry['mac']} - {entry['expiration']}")
             db.insert_mac(entry['url'], entry['mac'], entry['expiration'], None, None)
+            inserted_count += 1
 
+    logging.info("------------------------------------------")
+    logging.info(f"Inserted {inserted_count} new MACs, skipped {skipped_count} existing MACs.")
 
 
 if __name__ == "__main__":

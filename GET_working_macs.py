@@ -1,18 +1,23 @@
 import logging
 from Library.Sqllite import IPTV_Database
 
+
 #logging.basicConfig(filename="working_macs.log", level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', filemode='w')
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+#logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# logging to file and console
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', handlers=[logging.FileHandler("working_macs.log"), logging.StreamHandler()])
 
 db = IPTV_Database()
 
-logging.info("Fetching newest working MACs from the database...")
-logging.info("------------------------------------------------")
-
-working_macs = db.get_newest_working_mac_by_url()
-
-# Print table header
+# Create table header
 header = f"{'URL':60} | {'MAC':17} | {'Expiration':12} | {'German':6} | {'Adult':5}"
+
+logging.info("")
+logging.info('#' * len(header))
+logging.info("")
+
+working_macs = db.get_url_and_newest_working_mac()
+
 logging.info(header)
 logging.info('-' * len(header))
 

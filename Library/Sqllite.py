@@ -1,11 +1,21 @@
 import sqlite3
+from collections import namedtuple
 
 from Library.Settings import STATUS, Settings
 
+
+
 class IPTV_Database:
+
+    def __namedtuple_factory(self, cursor, row):
+        fields = [col[0] for col in cursor.description]
+        Row = namedtuple('Row', fields)
+        return Row(*row)
+
 
     def __init__(self):
         self.conn = sqlite3.connect(Settings.DB_PATH)
+        self.conn.row_factory = self.__namedtuple_factory
         self.create_tables()
 
     def __enter__(self):
@@ -13,7 +23,9 @@ class IPTV_Database:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
+
     
+
     def create_tables(self):
         self.conn.execute("""
             CREATE TABLE IF NOT EXISTS urls (
@@ -60,6 +72,7 @@ class IPTV_Database:
             )
         """)
         self.conn.commit()
+
 
     def get_clean_url(self, url):
         # Ensure no trailing slash
@@ -134,8 +147,8 @@ class IPTV_Database:
         """, (url,))
         return cursor.fetchall()
     
-    def get_all_not_failed_macs_by_url(self, url):
 
+    def get_all_other_macs_by_url(self, url, mac_id):
 
         url = self.get_clean_url(url)
 
@@ -146,8 +159,26 @@ class IPTV_Database:
             JOIN urls ON macs.url_id = urls.id
             WHERE urls.url = ?
             AND macs.failed < ?
+            AND macs.id != ?
             ORDER BY macs.expiration DESC
-        """, (url, Settings.MAX_FAILED_STATUS_ATTEMPTS))
+        """, (url, Settings.MAX_FAILED_STATUS_ATTEMPTS, mac_id))
+        return cursor.fetchall()
+    
+    
+    def get_all_not_success_macs_by_url(self, url):
+
+        url = self.get_clean_url(url)
+
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT macs.id, macs.mac, macs.expiration, macs.status, macs.error, macs.adult, macs.german
+            FROM macs
+            JOIN urls ON macs.url_id = urls.id
+            WHERE urls.url = ?
+            AND macs.failed < ?
+            AND macs.status != ?
+            ORDER BY macs.expiration DESC
+        """, (url, Settings.MAX_FAILED_STATUS_ATTEMPTS, STATUS.SUCCESS.value))
         return cursor.fetchall()
 
 
@@ -162,8 +193,39 @@ class IPTV_Database:
         """, (STATUS.SUCCESS.value,))
         return [row[0] for row in cursor.fetchall()]
 
+
+    def get_newest_working_mac_for_url(self, url):
+        cursor = self.conn.cursor()
+        # Status constants
+
+        cursor.execute("""
+            SELECT macs.id
+            FROM macs
+            JOIN urls ON macs.url_id = urls.id
+            WHERE macs.id IN (
+            SELECT MAX(id)
+            FROM macs
+            WHERE macs.status = ?
+            GROUP BY url_id
+            )
+            AND urls.url = ?
+        """, (STATUS.SUCCESS.value, url))
+
+        result = cursor.fetchone()
+        if result:
+            return result[0]
+
+        return None
+
+
+    # get mac by id
+    def get_mac_by_id(self, mac_id):
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT macs.id, macs.mac, macs.expiration, macs.status, macs.error, macs.adult, macs.german FROM macs WHERE id = ?", (mac_id,))
+        return cursor.fetchone()
+
     # Get for each URL the newest MAC with status = 1
-    def get_newest_working_mac_by_url(self):
+    def get_url_and_newest_working_mac(self):
         cursor = self.conn.cursor()
         # Status constants
 
@@ -177,6 +239,7 @@ class IPTV_Database:
             WHERE macs.status = ?
             GROUP BY url_id
             )
+            ORDER BY urls.url
         """, (STATUS.SUCCESS.value,))
         return cursor.fetchall()
 
