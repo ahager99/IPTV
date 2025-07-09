@@ -169,9 +169,6 @@ class STK_Channel:
             if stream_url.lower().startswith(prefix.lower()):
                 stream_url = stream_url[len(prefix):].strip()
 
-
-        result2 = False
-
         # Log the final URL
         logging.info(f"Channel URL: {self.channel_url}")
         logging.info(f"Real URL: {self.real_url}")

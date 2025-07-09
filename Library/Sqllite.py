@@ -143,8 +143,9 @@ class IPTV_Database:
             FROM macs
             JOIN urls ON macs.url_id = urls.id
             WHERE urls.url = ?
+            AND macs.failed < ?
             ORDER BY macs.expiration DESC
-        """, (url,))
+        """, (url, Settings.MAX_FAILED_STATUS_ATTEMPTS,))
         return cursor.fetchall()
     
 
