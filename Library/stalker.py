@@ -9,6 +9,7 @@ import requests
 from Library.Settings import STATUS
 from Library.vlc_player import VLCPlayer
 
+from colorama import init, Fore, Style
 
 
 class STK_Channel:
@@ -170,7 +171,7 @@ class STK_Channel:
                 stream_url = stream_url[len(prefix):].strip()
 
         # Log the final URL
-        logging.info(f"Channel URL: {self.channel_url}")
+        logging.info(f"{Fore.WHITE}Channel URL: {self.channel_url}")
         logging.info(f"Real URL: {self.real_url}")
         logging.info(f"Launching media player with cleaned URL: {stream_url}")
 

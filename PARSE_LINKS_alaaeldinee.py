@@ -95,6 +95,9 @@ def main():
     inserted_count = 0
     with IPTV_Database() as db:
         for counter, entry in enumerate(all_results, 1):
+            if not entry['url'] or not entry['mac']:
+                logging.warning(f"Skipping entry with missing URL or MAC: {entry}")
+                continue
             if db.get_mac_id(entry['url'], entry['mac']):
                 #logging.info(f"[{counter}/{len(all_results)}] EXISTS: {entry['url']} - {entry['mac']}")
                 skipped_count += 1

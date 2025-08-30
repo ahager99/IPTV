@@ -93,6 +93,9 @@ class IPTV_Database:
 
     def get_mac_id(self, url, mac):
 
+        if url is None or mac is None:
+            return None
+        
         url = self.get_clean_url(url)
 
         cursor = self.conn.cursor()
