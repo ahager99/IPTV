@@ -142,7 +142,7 @@ class IPTV_Database:
 
         cursor = self.conn.cursor()
         cursor.execute("""
-            SELECT macs.id, macs.mac, macs.expiration, macs.status, macs.error, macs.adult, macs.german
+            SELECT macs.id, macs.mac, macs.expiration, macs.status, macs.error, macs.adult, macs.german, macs.failed
             FROM macs
             JOIN urls ON macs.url_id = urls.id
             WHERE urls.url = ?
@@ -158,7 +158,7 @@ class IPTV_Database:
 
         cursor = self.conn.cursor()
         cursor.execute("""
-            SELECT macs.id, macs.mac, macs.expiration, macs.status, macs.error, macs.adult, macs.german
+            SELECT macs.id, macs.mac, macs.expiration, macs.status, macs.error, macs.adult, macs.german, macs.failed
             FROM macs
             JOIN urls ON macs.url_id = urls.id
             WHERE urls.url = ?

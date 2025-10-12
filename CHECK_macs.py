@@ -41,8 +41,8 @@ def process_mac(db, url, mac):
                                 success_message = f"Reached maximum attempts for genre. "
                                 logging.error(success_message)
                             continue
-                        
-                        logging.info(f"{Fore.BLUE}Processing genre '{genre.name}'...") 
+
+                        logging.info(f"{Fore.LIGHTBLUE_EX}Processing genre [{relevantGenreCounter}/{Settings.MAX_FAILED_STATUS_ATTEMPTS}] '{genre.name}'...")
 
                         # get channels for the genre
                         status, message, channels = genre.get_channels()
@@ -91,7 +91,7 @@ def process_mac(db, url, mac):
 
 
 def main():
-    init(autoreset=False)  # Initialize colorama
+    init(autoreset=True)  # Initialize colorama
 
     # Remember start time
     start_time = time.time()
@@ -134,18 +134,20 @@ def main():
                 logging.info(f"{Fore.YELLOW}------------------------------------------------")
                 macCounter += 1
                 MACPREFIX = f"{URLPREFIX} MAC[{macCounter}/{len(macs)}]"
-                logging.info(f"{MACPREFIX} Processing {macItem.mac} for URL: {url}")
+                logging.info(f"URL: {url}")
+                logging.info(f"{MACPREFIX} Processing {macItem.mac}: ID={macItem.id}, FAILED={macItem.failed}")
 
                 # Skip if a previous MAC is already working
                 if success == STATUS.SUCCESS:
-                    logging.info(f"{MACPREFIX} Skipping already working MAC: {macItem.mac} for URL: {url}")
+                    logging.info(f"{Fore.YELLOW}{MACPREFIX} Skipping already working MAC: {macItem.mac} for URL: {url}")
                     db.update_mac_status(macItem.id, STATUS.SKIPPED, "")
                 else:
                     # Process the MAC
                     success, success_message, is_german, is_adult = process_mac(db, url, macItem.mac)
 
                     # Update the MAC status in the database
-                    logging.info(f"{Fore.YELLOW}{MACPREFIX} Final result for MAC: {success} - {success_message}, is_german: {is_german}, is_adult: {is_adult}")
+                    color = Fore.GREEN if success == STATUS.SUCCESS else (Fore.YELLOW if success == STATUS.SKIPPED else Fore.RED)
+                    logging.info(f"{color}{MACPREFIX} Final result for MAC: {success} - {success_message}, is_german: {is_german}, is_adult: {is_adult}")
                     db.update_mac_status(macItem.id, success, success_message, is_german, is_adult)
 
             # Newline for better readability after URL processing    

@@ -11,7 +11,7 @@ class STATUS(Enum):
 
 class Settings:
     SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-    DB_PATH = SCRIPT_DIR + "\\IPTV.db"
+    DB_PATH = "C:\\OneDrive\\Sicherung\\IPTV.db"
     MAX_FAILED_STATUS_ATTEMPTS = 3
 
 
