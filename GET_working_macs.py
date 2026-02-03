@@ -6,7 +6,7 @@ from Library.Sqllite import IPTV_Database
 #logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 # logging to file and console
 #logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', handlers=[logging.FileHandler("working_macs.log"), logging.StreamHandler()])
-logging.basicConfig(level=logging.INFO, handlers=[logging.FileHandler("working_macs.log"), logging.StreamHandler()])
+logging.basicConfig(level=logging.INFO, handlers=[logging.FileHandler("working_macs.log", mode='w'), logging.StreamHandler()])
 
 
 db = IPTV_Database()
