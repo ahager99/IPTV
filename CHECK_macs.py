@@ -1,6 +1,7 @@
 import random
 import time
 import subprocess
+import argparse
 from urllib.parse import quote, urlparse, urlunparse
 
 import requests
@@ -93,15 +94,35 @@ def process_mac(db, url, mac):
 def main():
     init(autoreset=True)  # Initialize colorama
 
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='Check MACs for IPTV URLs')
+    parser.add_argument('--url', type=str, help='Optional URL to check MACs for. If not provided, all URLs will be processed.')
+    parser.add_argument('--process-all', action='store_true', help='Process all MACs regardless of finding a working one. By default, remaining MACs are skipped after finding a working MAC.')
+    args = parser.parse_args()
+
     # Remember start time
     start_time = time.time()
 
+
     with IPTV_Database() as db:
-        # Get all URLs from the database
-        urls = db.get_all_urls()
+        # Get all URLs from the database or filter by provided URL
+        if args.url:
+            # Check if the provided URL exists in the database
+            all_urls = db.get_all_urls()
+            if args.url in all_urls:
+                urls = [args.url]
+                logging.info(f"Processing specific URL: {args.url}")
+            else:
+                logging.error(f"URL '{args.url}' not found in the database.")
+                logging.info(f"Available URLs in database:")
+                for url in all_urls:
+                    logging.info(f"  - {url}")
+                return
+        else:
+            urls = db.get_all_urls()
 
         # Iterate through each URL and fetch its MACs
-        logging.info(f"Found {len(urls)} URLs in the database.")
+        logging.info(f"Found {len(urls)} URLs to process.")
         urlCounter = 0
         for url in urls:
             urlCounter += 1
@@ -137,8 +158,8 @@ def main():
                 logging.info(f"URL: {url}")
                 logging.info(f"{MACPREFIX} Processing {macItem.mac}: ID={macItem.id}, FAILED={macItem.failed}")
 
-                # Skip if a previous MAC is already working
-                if success == STATUS.SUCCESS:
+                # Skip if a previous MAC is already working (unless --process-all is set)
+                if success == STATUS.SUCCESS and not args.process_all:
                     logging.info(f"{Fore.YELLOW}{MACPREFIX} Skipping already working MAC: {macItem.mac} for URL: {url}")
                     db.update_mac_status(macItem.id, STATUS.SKIPPED, "")
                 else:

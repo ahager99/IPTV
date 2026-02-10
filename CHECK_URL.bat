@@ -1,0 +1,1 @@
+python CHECK_macs.py --url "http://ix.kingtv.pw/c" --process-all

@@ -1,0 +1,1 @@
+python CHECK_macs.py --process-all
