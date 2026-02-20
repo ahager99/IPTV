@@ -2,14 +2,26 @@
 import logging
 import re
 import subprocess
+import threading
 import time
 from urllib.parse import quote, urlparse, urlunparse
 
 import requests
 from Library.Settings import STATUS
+from Library.Settings import Settings
 from Library.vlc_player import VLCPlayer
 
 from colorama import init, Fore, Style
+
+
+_vlc_semaphore = threading.BoundedSemaphore(max(1, Settings.VLC_MAX_PARALLEL))
+
+
+def configure_vlc_parallel(max_parallel):
+    global _vlc_semaphore
+    limit = max(1, int(max_parallel))
+    Settings.VLC_MAX_PARALLEL = limit
+    _vlc_semaphore = threading.BoundedSemaphore(limit)
 
 
 class STK_Channel:
@@ -176,24 +188,31 @@ class STK_Channel:
         logging.info(f"Launching media player with cleaned URL: {stream_url}")
 
         # Check if VLC can play the stream
-        with VLCPlayer(stream_url) as vlc_player_instance:
-            vlc_player_instance.play()
-            for i in range(5):
-                is_playing = vlc_player_instance.is_playing()
-                playback_failed = vlc_player_instance.playback_failed()
-                if is_playing or playback_failed:
-                    logging.debug(f"VLC playback status: is_playing={is_playing}, playback_failed={playback_failed}")
-                    break
+        acquired = _vlc_semaphore.acquire(timeout=Settings.VLC_SEMAPHORE_TIMEOUT_SECONDS)
+        if not acquired:
+            return STATUS.ERROR, "Timeout waiting for VLC validation slot"
+
+        try:
+            with VLCPlayer(stream_url) as vlc_player_instance:
+                vlc_player_instance.play()
+                for i in range(Settings.VLC_PLAYBACK_CHECK_ATTEMPTS):
+                    is_playing = vlc_player_instance.is_playing()
+                    playback_failed = vlc_player_instance.playback_failed()
+                    if is_playing or playback_failed:
+                        logging.debug(f"VLC playback status: is_playing={is_playing}, playback_failed={playback_failed}")
+                        break
+                    else:
+                        logging.debug(f"Waiting for VLC to start playing the stream: {stream_url} (attempt {i+1})")
+                        time.sleep(Settings.VLC_PLAYBACK_CHECK_INTERVAL_SECONDS)
+
+                result = vlc_player_instance.is_playing()
+                if result:
+                    vlc_player_instance.stop()
+                    return STATUS.SUCCESS, "VLC is playing the stream"
                 else:
-                    logging.debug(f"Waiting for VLC to start playing the stream: {stream_url} (attempt {i+1})")
-                    time.sleep(1)
-            
-            result = vlc_player_instance.is_playing()
-            if result:
-                vlc_player_instance.stop()
-                return STATUS.SUCCESS, f"VLC is playing the stream"
-            else:
-                return STATUS.ERROR, f"VLC is not playing the stream"
+                    return STATUS.ERROR, "VLC is not playing the stream"
+        finally:
+            _vlc_semaphore.release()
 
 
 

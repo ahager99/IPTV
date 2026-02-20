@@ -11,8 +11,12 @@ class STATUS(Enum):
 
 class Settings:
     SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-    DB_PATH = "C:\\OneDrive\\Sicherung\\IPTV.db"
+    DB_PATH = "C:\\Users\\ahage\\OneDrive\\Sicherung\\IPTV.db"
     MAX_FAILED_STATUS_ATTEMPTS = 3
+    VLC_MAX_PARALLEL = 1
+    VLC_SEMAPHORE_TIMEOUT_SECONDS = 60
+    VLC_PLAYBACK_CHECK_ATTEMPTS = 8
+    VLC_PLAYBACK_CHECK_INTERVAL_SECONDS = 1
 
 
     EPG_URLS = [

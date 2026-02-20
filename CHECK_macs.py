@@ -2,10 +2,12 @@ import random
 import time
 import subprocess
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections import deque
 from urllib.parse import quote, urlparse, urlunparse
 
 import requests
-from Library import IPTV_Database, STK_Server, Settings, VLCPlayer, STATUS, EPG_Server
+from Library import IPTV_Database, STK_Server, Settings, VLCPlayer, STATUS, EPG_Server, configure_vlc_parallel
 
 from colorama import init, Fore, Style
 
@@ -23,7 +25,7 @@ def process_mac(db, url, mac):
     with STK_Server(url, mac) as server:
         login_status, status_message = server.login()
         if login_status == STATUS.SUCCESS:
-            logging.info(f"Successfully logged in with MAC: {mac} for URL: {url}")
+            logging.debug(f"Successfully logged in with MAC: {mac} for URL: {url}")
             status, message, genres = server.get_genres()
             if status == STATUS.SUCCESS and genres:
                 relevantGenreCounter = 0
@@ -43,7 +45,7 @@ def process_mac(db, url, mac):
                                 logging.error(success_message)
                             continue
 
-                        logging.info(f"{Fore.LIGHTBLUE_EX}Processing genre [{relevantGenreCounter}/{Settings.MAX_FAILED_STATUS_ATTEMPTS}] '{genre.name}'...")
+                        logging.debug(f"Processing genre [{relevantGenreCounter}/{Settings.MAX_FAILED_STATUS_ATTEMPTS}] '{genre.name}'...")
 
                         # get channels for the genre
                         status, message, channels = genre.get_channels()
@@ -57,33 +59,33 @@ def process_mac(db, url, mac):
                                 for i in range(Settings.MAX_FAILED_STATUS_ATTEMPTS):
                                     random_index = random.randint(0, len(channels) - 1)
                                     channel = channels[random_index]
-                                    logging.info(f"{Fore.CYAN}[{i+1}/{Settings.MAX_FAILED_STATUS_ATTEMPTS}] Channel '{channel.name}'.....")
+                                    logging.debug(f"[{i+1}/{Settings.MAX_FAILED_STATUS_ATTEMPTS}] Channel '{channel.name}'.....")
                                     status, message = channel.validate_url()
                                     if status == STATUS.SUCCESS:
                                         success = STATUS.SUCCESS
                                         success_message = ""
-                                        logging.info(f"{Fore.GREEN}Channel is valid.")
+                                        logging.debug("Channel is valid.")
                                         # exit the loop if a working channel was found
                                         break
                                     else:
                                         success = STATUS.ERROR
                                         success_message = f"Channel validation failed: {message}"
-                                        logging.info(Fore.RED + success_message)
+                                        logging.debug(success_message)
                         else:
                             success = STATUS.CONTENT
                             success_message = f"Failed to get channels for genre '{genre.name}': {message}"
-                            logging.info(Fore.RED + success_message)                            
+                            logging.debug(success_message)                            
 
 
                 # If no relevant genres were found, set success to CONTENT because no relevant genres were found    
                 if success == None:
                     success = STATUS.CONTENT
                     success_message = f"No relevant genres found"
-                    logging.info(Fore.RED +success_message)
+                    logging.debug(success_message)
             else:
                 success = STATUS.CONTENT
                 success_message = f"No genres found"
-                logging.info(Fore.RED + success_message)
+                logging.debug(success_message)
         else:
             success = login_status
             success_message = f"Login failed - Status: {login_status}, Message: {status_message}"
@@ -98,7 +100,12 @@ def main():
     parser = argparse.ArgumentParser(description='Check MACs for IPTV URLs')
     parser.add_argument('--url', type=str, help='Optional URL to check MACs for. If not provided, all URLs will be processed.')
     parser.add_argument('--process-all', action='store_true', help='Process all MACs regardless of finding a working one. By default, remaining MACs are skipped after finding a working MAC.')
+    parser.add_argument('--workers', type=int, default=10, help='Number of parallel workers for MAC checks (default: 10).')
+    parser.add_argument('--vlc-workers', type=int, default=Settings.VLC_MAX_PARALLEL, help=f'Number of parallel VLC stream validations (default: {Settings.VLC_MAX_PARALLEL}).')
     args = parser.parse_args()
+
+    configure_vlc_parallel(args.vlc_workers)
+    logging.info(f"VLC parallel validations: {max(1, args.vlc_workers)}")
 
     # Remember start time
     start_time = time.time()
@@ -129,19 +136,16 @@ def main():
             URLPREFIX = f"URL[{urlCounter}/{len(urls)}] "
             success = None
             logging.info("")
-            logging.info("")
-            logging.info(f"{Fore.WHITE}#################################################")
-            logging.info(f"Processing {URLPREFIX}'{url}'")
+            logging.info(f"{Fore.WHITE}URL {urlCounter}/{len(urls)}: {url}")
             
 
             # First check the newest working MAC for the URL
             mac_id = db.get_newest_working_mac_for_url(url)
             if mac_id:
-                logging.info(f"{Fore.YELLOW}{URLPREFIX}------------------------------------------------")
                 mac = db.get_mac_by_id(mac_id).mac
-                logging.info(f"{URLPREFIX}Checking already known success MAC: '{mac}'")
+                logging.info(f"{Fore.YELLOW}{URLPREFIX}Known good MAC check: {mac}")
                 success, success_message, is_german, is_adult = process_mac(db, url, mac)
-                logging.info(f"{Fore.YELLOW}{URLPREFIX}Final result for MAC: {success} - {success_message}, is_german: {is_german}, is_adult: {is_adult}")
+                logging.info(f"{Fore.YELLOW}{URLPREFIX}Known good MAC result: {success}")
                 db.update_mac_status(mac_id, success, success_message, is_german, is_adult)
 
                 # Processing the remaining MACs
@@ -149,31 +153,73 @@ def main():
             else:
                 macs = db.get_all_macs_by_url(url)
             	
-            logging.info(f"{Fore.WHITE}{URLPREFIX}'{url}' with {len(macs)} unprocessed / success / skipped / error MACs")
-            macCounter = 0
-            for macItem in macs:
-                logging.info(f"{Fore.YELLOW}------------------------------------------------")
-                macCounter += 1
-                MACPREFIX = f"{URLPREFIX} MAC[{macCounter}/{len(macs)}]"
-                logging.info(f"URL: {url}")
-                logging.info(f"{MACPREFIX} Processing {macItem.mac}: ID={macItem.id}, FAILED={macItem.failed}")
+            logging.info(f"{Fore.WHITE}{URLPREFIX}MACs to check: {len(macs)}, workers: {max(1, args.workers)}")
 
-                # Skip if a previous MAC is already working (unless --process-all is set)
-                if success == STATUS.SUCCESS and not args.process_all:
-                    logging.info(f"{Fore.YELLOW}{MACPREFIX} Skipping already working MAC: {macItem.mac} for URL: {url}")
+            if success == STATUS.SUCCESS and not args.process_all:
+                for macCounter, macItem in enumerate(macs, start=1):
+                    MACPREFIX = f"{URLPREFIX} MAC[{macCounter}/{len(macs)}]"
+                    logging.info(f"{Fore.YELLOW}{MACPREFIX} SKIP (already working): {macItem.mac}")
                     db.update_mac_status(macItem.id, STATUS.SKIPPED, "")
-                else:
-                    # Process the MAC
-                    success, success_message, is_german, is_adult = process_mac(db, url, macItem.mac)
+            else:
+                max_workers = max(1, args.workers)
+                available_workers = deque(range(1, max_workers + 1))
+                mac_entries = list(enumerate(macs, start=1))
+                mac_iter = iter(mac_entries)
+                futures = {}
+                stop_submitting = False
 
-                    # Update the MAC status in the database
-                    color = Fore.GREEN if success == STATUS.SUCCESS else (Fore.YELLOW if success == STATUS.SKIPPED else Fore.RED)
-                    logging.info(f"{color}{MACPREFIX} Final result for MAC: {success} - {success_message}, is_german: {is_german}, is_adult: {is_adult}")
-                    db.update_mac_status(macItem.id, success, success_message, is_german, is_adult)
+                def submit_next():
+                    try:
+                        macCounter, macItem = next(mac_iter)
+                    except StopIteration:
+                        return False
+
+                    if not available_workers:
+                        return False
+
+                    worker_id = available_workers.popleft()
+                    MACPREFIX = f"{URLPREFIX} MAC[{macCounter}/{len(macs)}]"
+                    logging.info(f"{Fore.CYAN}W{worker_id} START {url} {macItem.mac} (id={macItem.id}, failed={macItem.failed})")
+                    future = executor.submit(process_mac, db, url, macItem.mac)
+                    futures[future] = (macCounter, macItem, MACPREFIX, worker_id)
+                    return True
+
+                with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    while len(futures) < max_workers and submit_next():
+                        pass
+
+                    while futures:
+                        for future in as_completed(list(futures.keys())):
+                            macCounter, macItem, MACPREFIX, worker_id = futures.pop(future)
+                            try:
+                                result_success, success_message, is_german, is_adult = future.result()
+                            except Exception as exc:
+                                result_success = STATUS.ERROR
+                                success_message = f"Unhandled error: {exc}"
+                                is_german = None
+                                is_adult = None
+
+                            if result_success == STATUS.SUCCESS:
+                                success = STATUS.SUCCESS
+                                if not args.process_all:
+                                    stop_submitting = True
+
+                            color = Fore.GREEN if result_success == STATUS.SUCCESS else (Fore.YELLOW if result_success == STATUS.SKIPPED else Fore.RED)
+                            logging.info(f"{color}W{worker_id} DONE  {url} {macItem.mac} -> {result_success}")
+                            db.update_mac_status(macItem.id, result_success, success_message, is_german, is_adult)
+                            available_workers.append(worker_id)
+
+                            if not stop_submitting:
+                                submit_next()
+
+                if stop_submitting and not args.process_all:
+                    for macCounter, macItem in mac_iter:
+                        MACPREFIX = f"{URLPREFIX} MAC[{macCounter}/{len(macs)}]"
+                        logging.info(f"{Fore.YELLOW}{MACPREFIX} SKIP (already working): {macItem.mac}")
+                        db.update_mac_status(macItem.id, STATUS.SKIPPED, "")
 
             # Newline for better readability after URL processing    
             logging.info("") 
-            logging.info("")
 
     # Calculate and log the total time taken
     end_time = time.time()

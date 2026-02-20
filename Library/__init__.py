@@ -1,5 +1,5 @@
 from .Sqllite import IPTV_Database
-from .stalker import STK_Server
+from .stalker import STK_Server, configure_vlc_parallel
 from .vlc_player import VLCPlayer
 from .Settings import Settings, STATUS
 from .epg import EPG_Server
