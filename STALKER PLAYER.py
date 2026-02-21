@@ -452,11 +452,12 @@ class ProfileDialog(QDialog):
     profile_selected = pyqtSignal(dict)
     profiles_updated = pyqtSignal(list)
 
-    def __init__(self, profiles, parent=None):
+    def __init__(self, profiles, selected_profile=None, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Profile Manager")
-        self.setFixedSize(300, 400)
+        self.setFixedSize(500, 400)
         self.profiles = profiles
+        self.selected_profile = selected_profile
 
         layout = QVBoxLayout(self)
         self.profile_list = QListWidget()
@@ -488,10 +489,21 @@ class ProfileDialog(QDialog):
 
     def load_profile_list(self):
         self.profile_list.clear()
+        selected_row = -1
         for profile in self.profiles:
             item = QListWidgetItem(profile["name"])
             item.setData(Qt.UserRole, profile)
             self.profile_list.addItem(item)
+            if self.selected_profile and selected_row == -1:
+                same_url = profile.get("url") == self.selected_profile.get("url")
+                same_mac = profile.get("mac") == self.selected_profile.get("mac")
+                same_name = profile.get("name") == self.selected_profile.get("name")
+                if (same_url and same_mac) or same_name:
+                    selected_row = self.profile_list.count() - 1
+
+        if selected_row >= 0:
+            self.profile_list.setCurrentRow(selected_row)
+            self.profile_list.scrollToItem(self.profile_list.item(selected_row))
 
     def add_profile(self):
         name, ok = QInputDialog.getText(self, "Add Profile", "Enter profile name:")
@@ -837,9 +849,9 @@ class MainWindow(QMainWindow):
 
     def load_profiles(self):
         with IPTV_Database() as db:
-            macs = db.get_url_and_newest_working_mac()
+            macs = db.get_url_and_working_mac()
             if macs:
-                self.profiles = [{"name": mac.url + " (" 
+                self.profiles = [{"name": mac.url + " - " + mac.mac + " (" 
                                   + ("G" if mac.german else "")
                                   + ("A" if mac.adult else "")
                                   + ")", "url": mac.url, "mac": mac.mac} for mac in macs]
@@ -853,7 +865,11 @@ class MainWindow(QMainWindow):
         self.settings.setValue("profiles", self.profiles)
 
     def open_profile_dialog(self):
-        dialog = ProfileDialog(self.profiles, self)
+        selected_profile = {
+            "url": self.hostname_input.text().strip(),
+            "mac": self.mac_input.text().strip(),
+        }
+        dialog = ProfileDialog(self.profiles, selected_profile=selected_profile, parent=self)
         dialog.profile_selected.connect(self.populate_profile_fields)
         dialog.profiles_updated.connect(self.update_profiles)
         dialog.exec_()

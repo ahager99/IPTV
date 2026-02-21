@@ -1,4 +1,5 @@
 import os
+import logging
 
 from enum import Enum, auto
 
@@ -17,6 +18,10 @@ class Settings:
     VLC_SEMAPHORE_TIMEOUT_SECONDS = 60
     VLC_PLAYBACK_CHECK_ATTEMPTS = 8
     VLC_PLAYBACK_CHECK_INTERVAL_SECONDS = 1
+
+    LOG_LEVEL = logging.INFO
+    LOG_FORMAT = '%(asctime)s - %(levelname)s - %(message)s'
+    VERBOSE_SUBPROCESS_OUTPUT = False
 
 
     EPG_URLS = [

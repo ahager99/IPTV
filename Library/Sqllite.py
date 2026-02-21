@@ -246,6 +246,20 @@ class IPTV_Database:
             ORDER BY urls.url
         """, (STATUS.SUCCESS.value,))
         return cursor.fetchall()
+    
+    # Get for each URL the working MACs
+    def get_url_and_working_mac(self):
+        cursor = self.conn.cursor()
+        # Status constants
+
+        cursor.execute(f"""
+            SELECT urls.url, macs.mac, macs.expiration, macs.german, macs.adult
+            FROM macs
+            JOIN urls ON macs.url_id = urls.id
+            WHERE macs.status = ?
+            ORDER BY urls.url, macs.mac
+        """, (STATUS.SUCCESS.value,))
+        return cursor.fetchall()
 
     
     # Get all URLs in the database

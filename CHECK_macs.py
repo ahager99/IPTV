@@ -12,7 +12,7 @@ from Library import IPTV_Database, STK_Server, Settings, VLCPlayer, STATUS, EPG_
 from colorama import init, Fore, Style
 
 import logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=Settings.LOG_LEVEL, format=Settings.LOG_FORMAT)
 
 
 def process_mac(db, url, mac):
@@ -42,7 +42,7 @@ def process_mac(db, url, mac):
                             if success == None:
                                 success = STATUS.CONTENT
                                 success_message = f"Reached maximum attempts for genre. "
-                                logging.error(success_message)
+                                logging.debug(success_message)
                             continue
 
                         logging.debug(f"Processing genre [{relevantGenreCounter}/{Settings.MAX_FAILED_STATUS_ATTEMPTS}] '{genre.name}'...")
@@ -53,7 +53,7 @@ def process_mac(db, url, mac):
                             if len(channels) == 0:
                                 success = STATUS.CONTENT
                                 success_message = f"No channels found for genre '{genre.name}'"
-                                logging.error(Fore.RED + success_message) 
+                                logging.debug(Fore.RED + success_message)
                             else:
                                 # process 5 random channels from the genre
                                 for i in range(Settings.MAX_FAILED_STATUS_ATTEMPTS):
@@ -93,6 +93,10 @@ def process_mac(db, url, mac):
     return success, success_message, is_german, is_adult
 
 
+def normalize_status(status_value):
+    return (status_value or "").strip().upper()
+
+
 def main():
     init(autoreset=True)  # Initialize colorama
 
@@ -102,10 +106,23 @@ def main():
     parser.add_argument('--process-all', action='store_true', help='Process all MACs regardless of finding a working one. By default, remaining MACs are skipped after finding a working MAC.')
     parser.add_argument('--workers', type=int, default=10, help='Number of parallel workers for MAC checks (default: 10).')
     parser.add_argument('--vlc-workers', type=int, default=Settings.VLC_MAX_PARALLEL, help=f'Number of parallel VLC stream validations (default: {Settings.VLC_MAX_PARALLEL}).')
+    parser.add_argument('--skip-login', action='store_true', help='Skip MACs already marked with status LOGIN.')
+    parser.add_argument('--skip-error', action='store_true', help='Skip MACs already marked with status ERROR.')
+    parser.add_argument('--skip-content', action='store_true', help='Skip MACs already marked with status CONTENT.')
     args = parser.parse_args()
 
     configure_vlc_parallel(args.vlc_workers)
     logging.info(f"VLC parallel validations: {max(1, args.vlc_workers)}")
+
+    skip_statuses = set()
+    if args.skip_login:
+        skip_statuses.add(STATUS.LOGIN.value)
+    if args.skip_error:
+        skip_statuses.add(STATUS.ERROR.value)
+    if args.skip_content:
+        skip_statuses.add(STATUS.CONTENT.value)
+    if skip_statuses:
+        logging.info(f"Skipping MACs with existing status: {', '.join(sorted(skip_statuses))}")
 
     # Remember start time
     start_time = time.time()
@@ -121,44 +138,77 @@ def main():
                 logging.info(f"Processing specific URL: {args.url}")
             else:
                 logging.error(f"URL '{args.url}' not found in the database.")
-                logging.info(f"Available URLs in database:")
+                logging.warning("Available URLs in database:")
                 for url in all_urls:
-                    logging.info(f"  - {url}")
+                    logging.warning(f"  - {url}")
                 return
         else:
             urls = db.get_all_urls()
 
         # Iterate through each URL and fetch its MACs
-        logging.info(f"Found {len(urls)} URLs to process.")
-        urlCounter = 0
-        for url in urls:
-            urlCounter += 1
-            URLPREFIX = f"URL[{urlCounter}/{len(urls)}] "
+        total_urls = len(urls)
+        global_status_counts = {
+            STATUS.SUCCESS: 0,
+            STATUS.LOGIN: 0,
+            STATUS.ERROR: 0,
+            STATUS.CONTENT: 0,
+            STATUS.SKIPPED: 0,
+        }
+        logging.info(f"Found {total_urls} URLs to process.")
+        for urlCounter, url in enumerate(urls, start=1):
+            URLPREFIX = f"URL[{urlCounter}/{total_urls}]"
+            url_progress_percent = (urlCounter / total_urls) * 100 if total_urls else 100
             success = None
-            logging.info("")
-            logging.info(f"{Fore.WHITE}URL {urlCounter}/{len(urls)}: {url}")
+            status_counts = {
+                STATUS.SUCCESS: 0,
+                STATUS.LOGIN: 0,
+                STATUS.ERROR: 0,
+                STATUS.CONTENT: 0,
+                STATUS.SKIPPED: 0,
+            }
+            logging.info(f"{Fore.CYAN}{URLPREFIX} ------------------------------------------------------------------------")
+            logging.info(f"{Fore.CYAN}{URLPREFIX} ({url_progress_percent:.0f}%) {url}")
             
 
             # First check the newest working MAC for the URL
             mac_id = db.get_newest_working_mac_for_url(url)
             if mac_id:
                 mac = db.get_mac_by_id(mac_id).mac
-                logging.info(f"{Fore.YELLOW}{URLPREFIX}Known good MAC check: {mac}")
+                logging.debug(f"{Fore.YELLOW}{URLPREFIX}Known good MAC check: {mac}")
                 success, success_message, is_german, is_adult = process_mac(db, url, mac)
-                logging.info(f"{Fore.YELLOW}{URLPREFIX}Known good MAC result: {success}")
+                logging.debug(f"{Fore.YELLOW}{URLPREFIX}Known good MAC result: {success}")
+                if success in status_counts:
+                    status_counts[success] += 1
                 db.update_mac_status(mac_id, success, success_message, is_german, is_adult)
 
                 # Processing the remaining MACs
                 macs = db.get_all_other_macs_by_url(url, mac_id)
             else:
                 macs = db.get_all_macs_by_url(url)
+
+            filtered_out_count = 0
+            if skip_statuses:
+                original_count = len(macs)
+                macs = [
+                    macItem for macItem in macs
+                    if normalize_status(macItem.status) not in skip_statuses
+                ]
+                filtered_out_count = original_count - len(macs)
+                if filtered_out_count:
+                    status_counts[STATUS.SKIPPED] += filtered_out_count
+                    logging.info(
+                        f"{Fore.YELLOW}{URLPREFIX} skipped by status filter: {filtered_out_count}"
+                    )
             	
-            logging.info(f"{Fore.WHITE}{URLPREFIX}MACs to check: {len(macs)}, workers: {max(1, args.workers)}")
+            total_macs = len(macs)
+            logging.info(f"{Fore.WHITE}{URLPREFIX} MACs to check: {total_macs}, workers: {max(1, args.workers)}")
 
             if success == STATUS.SUCCESS and not args.process_all:
                 for macCounter, macItem in enumerate(macs, start=1):
-                    MACPREFIX = f"{URLPREFIX} MAC[{macCounter}/{len(macs)}]"
-                    logging.info(f"{Fore.YELLOW}{MACPREFIX} SKIP (already working): {macItem.mac}")
+                    MACPREFIX = f"{URLPREFIX} MAC[{macCounter}/{total_macs}]"
+                    mac_progress_percent = (macCounter / total_macs) * 100 if total_macs else 100
+                    logging.info(f"{Fore.YELLOW}{MACPREFIX} ({mac_progress_percent:.0f}%) SKIP (already working): {macItem.mac}")
+                    status_counts[STATUS.SKIPPED] += 1
                     db.update_mac_status(macItem.id, STATUS.SKIPPED, "")
             else:
                 max_workers = max(1, args.workers)
@@ -167,6 +217,7 @@ def main():
                 mac_iter = iter(mac_entries)
                 futures = {}
                 stop_submitting = False
+                completed_macs = 0
 
                 def submit_next():
                     try:
@@ -178,8 +229,8 @@ def main():
                         return False
 
                     worker_id = available_workers.popleft()
-                    MACPREFIX = f"{URLPREFIX} MAC[{macCounter}/{len(macs)}]"
-                    logging.info(f"{Fore.CYAN}W{worker_id} START {url} {macItem.mac} (id={macItem.id}, failed={macItem.failed})")
+                    MACPREFIX = f"{URLPREFIX} MAC[{macCounter}/{total_macs}]"
+                    logging.debug(f"{Fore.CYAN}W{worker_id} START {url} {macItem.mac} (id={macItem.id}, failed={macItem.failed})")
                     future = executor.submit(process_mac, db, url, macItem.mac)
                     futures[future] = (macCounter, macItem, MACPREFIX, worker_id)
                     return True
@@ -204,8 +255,12 @@ def main():
                                 if not args.process_all:
                                     stop_submitting = True
 
+                            completed_macs += 1
+                            mac_progress_percent = (completed_macs / total_macs) * 100 if total_macs else 100
                             color = Fore.GREEN if result_success == STATUS.SUCCESS else (Fore.YELLOW if result_success == STATUS.SKIPPED else Fore.RED)
-                            logging.info(f"{color}W{worker_id} DONE  {url} {macItem.mac} -> {result_success}")
+                            logging.info(f"{color}{MACPREFIX} ({completed_macs}/{total_macs}, {mac_progress_percent:.0f}%) -> {result_success}")
+                            if result_success in status_counts:
+                                status_counts[result_success] += 1
                             db.update_mac_status(macItem.id, result_success, success_message, is_german, is_adult)
                             available_workers.append(worker_id)
 
@@ -214,12 +269,25 @@ def main():
 
                 if stop_submitting and not args.process_all:
                     for macCounter, macItem in mac_iter:
-                        MACPREFIX = f"{URLPREFIX} MAC[{macCounter}/{len(macs)}]"
-                        logging.info(f"{Fore.YELLOW}{MACPREFIX} SKIP (already working): {macItem.mac}")
+                        completed_macs += 1
+                        MACPREFIX = f"{URLPREFIX} MAC[{macCounter}/{total_macs}]"
+                        mac_progress_percent = (completed_macs / total_macs) * 100 if total_macs else 100
+                        logging.info(f"{Fore.YELLOW}{MACPREFIX} ({completed_macs}/{total_macs}, {mac_progress_percent:.0f}%) SKIP (already working): {macItem.mac}")
+                        status_counts[STATUS.SKIPPED] += 1
                         db.update_mac_status(macItem.id, STATUS.SKIPPED, "")
 
-            # Newline for better readability after URL processing    
-            logging.info("") 
+            total_counted = sum(status_counts.values())
+            for state, count in status_counts.items():
+                global_status_counts[state] += count
+            logging.info(
+                f"{Fore.WHITE}{URLPREFIX} summary: "
+                f"success={status_counts[STATUS.SUCCESS]}, "
+                f"login={status_counts[STATUS.LOGIN]}, "
+                f"error={status_counts[STATUS.ERROR]}, "
+                f"content={status_counts[STATUS.CONTENT]}, "
+                f"skipped={status_counts[STATUS.SKIPPED]}, "
+                f"total={total_counted}"
+            )
 
     # Calculate and log the total time taken
     end_time = time.time()
@@ -229,6 +297,16 @@ def main():
     minutes, seconds = divmod(remainder, 60)
     logging.info("------------------------------------------------")
     logging.info("Processing completed.")
+    global_total_counted = sum(global_status_counts.values())
+    logging.info(
+        f"{Fore.WHITE}GLOBAL summary: "
+        f"success={global_status_counts[STATUS.SUCCESS]}, "
+        f"login={global_status_counts[STATUS.LOGIN]}, "
+        f"error={global_status_counts[STATUS.ERROR]}, "
+        f"content={global_status_counts[STATUS.CONTENT]}, "
+        f"skipped={global_status_counts[STATUS.SKIPPED]}, "
+        f"total={global_total_counted}"
+    )
     logging.info(f"Started at: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(start_time))}")
     logging.info(f"Finished at: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(end_time))}")
     logging.info(f"Total time taken: {int(hours)} hours, {int(minutes)} minutes, {int(seconds)} seconds")

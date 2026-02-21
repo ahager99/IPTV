@@ -183,9 +183,9 @@ class STK_Channel:
                 stream_url = stream_url[len(prefix):].strip()
 
         # Log the final URL
-        logging.info(f"{Fore.WHITE}Channel URL: {self.channel_url}")
-        logging.info(f"Real URL: {self.real_url}")
-        logging.info(f"Launching media player with cleaned URL: {stream_url}")
+        #logging.info(f"{Fore.WHITE}Channel URL: {self.channel_url}")
+        #logging.info(f"Real URL: {self.real_url}")
+        #logging.info(f"Launching media player with cleaned URL: {stream_url}")
 
         # Check if VLC can play the stream
         acquired = _vlc_semaphore.acquire(timeout=Settings.VLC_SEMAPHORE_TIMEOUT_SECONDS)
