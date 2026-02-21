@@ -39,6 +39,9 @@ from PyQt5.QtWidgets import (
     QInputDialog,
     QDialog,
     QStyle,
+    QSplitter,
+    QSizePolicy,
+    QStackedWidget,
 )
 from PyQt5.QtGui import QStandardItemModel, QStandardItem, QIcon
 from urllib.parse import quote, urlparse, urlunparse
@@ -576,7 +579,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("MAC IPTV Player by MY-1 v3.5")
-        self.setGeometry(100, 100, 550, 560)
+        self.setGeometry(100, 100, 1200, 700)
 
         self.settings = QSettings("MyCompany", "IPTVPlayer")
         self.profiles = []
@@ -584,7 +587,88 @@ class MainWindow(QMainWindow):
 
         central_widget = QWidget(self)
         self.setCentralWidget(central_widget)
-        layout = QVBoxLayout(central_widget)
+
+        main_layout = QHBoxLayout(central_widget)
+        main_splitter = QSplitter(Qt.Horizontal)
+        main_layout.addWidget(main_splitter)
+
+        left_panel = QWidget(self)
+        left_panel.setFixedWidth(430)
+        layout = QVBoxLayout(left_panel)
+        main_splitter.addWidget(left_panel)
+
+        right_panel = QWidget(self)
+        right_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        right_layout = QVBoxLayout(right_panel)
+
+        self.video_stack = QStackedWidget(right_panel)
+        right_layout.addWidget(self.video_stack, 1)
+
+        self.video_page = QWidget(self.video_stack)
+        video_page_layout = QVBoxLayout(self.video_page)
+        video_page_layout.setContentsMargins(0, 0, 0, 0)
+        video_page_layout.setSpacing(0)
+
+        self.video_frame = QWidget(self.video_page)
+        self.video_frame.setAttribute(Qt.WA_NativeWindow, True)
+        self.video_frame.setStyleSheet("background-color: black;")
+        self.video_frame.setMinimumSize(420, 320)
+        video_page_layout.addWidget(self.video_frame)
+
+        self.status_page = QWidget(self.video_stack)
+        self.status_page.setStyleSheet("background-color: black;")
+        status_page_layout = QVBoxLayout(self.status_page)
+        status_page_layout.setContentsMargins(20, 20, 20, 20)
+        self.status_page_label = QLabel("No stream", self.status_page)
+        self.status_page_label.setAlignment(Qt.AlignCenter)
+        self.status_page_label.setWordWrap(True)
+        self.status_page_label.setStyleSheet(
+            "QLabel {"
+            "color: white;"
+            "font-size: 34px;"
+            "font-weight: bold;"
+            "}"
+        )
+        status_page_layout.addWidget(self.status_page_label)
+
+        self.video_stack.addWidget(self.video_page)
+        self.video_stack.addWidget(self.status_page)
+        self.video_stack.setCurrentWidget(self.video_page)
+
+        self.stream_status_label = QLabel("No stream", self.video_frame)
+        self.stream_status_label.setAlignment(Qt.AlignCenter)
+        self.stream_status_label.setStyleSheet(
+            "QLabel {"
+            "color: white;"
+            "background-color: rgba(0, 0, 0, 120);"
+            "font-size: 30px;"
+            "font-weight: bold;"
+            "padding: 12px;"
+            "}"
+        )
+        self.stream_status_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self.stream_status_label.raise_()
+
+        playback_nav_layout = QHBoxLayout()
+        self.prev_channel_button = QPushButton("Previous")
+        self.prev_channel_button.clicked.connect(self.play_previous_channel)
+        playback_nav_layout.addWidget(self.prev_channel_button)
+
+        self.next_channel_button = QPushButton("Next")
+        self.next_channel_button.clicked.connect(self.play_next_channel)
+        playback_nav_layout.addWidget(self.next_channel_button)
+        right_layout.addLayout(playback_nav_layout)
+
+        self.open_standalone_button = QPushButton("Open Current in Standalone Player")
+        self.open_standalone_button.setEnabled(False)
+        self.open_standalone_button.clicked.connect(self.open_current_stream_in_standalone)
+        right_layout.addWidget(self.open_standalone_button)
+
+        main_splitter.addWidget(right_panel)
+        main_splitter.setChildrenCollapsible(False)
+        main_splitter.setStretchFactor(0, 0)
+        main_splitter.setStretchFactor(1, 1)
+        main_splitter.setSizes([430, 770])
 
         top_layout = QVBoxLayout()
         layout.addLayout(top_layout)
@@ -713,6 +797,18 @@ class MainWindow(QMainWindow):
         self.token_timestamp = None
         self.current_request_thread = None
         self.current_stalker_thread = None
+        self.current_stream_url = None
+        self.embedded_vlc_player = None
+        self.current_play_tab = None
+        self.current_play_row = None
+        self.stream_status_timer = QTimer()
+        self.stream_status_timer.timeout.connect(self.update_stream_status)
+        self.stream_status_interval_ms = 500
+        self.stream_status_timeout_ms = 15000
+        self.stream_status_elapsed_ms = 0
+        self.stream_status_hide_timer = QTimer()
+        self.stream_status_hide_timer.setSingleShot(True)
+        self.stream_status_hide_timer.timeout.connect(self.stream_status_label.hide)
 
         # Add a layout for bottom controls
         bottom_layout = QHBoxLayout()
@@ -747,6 +843,9 @@ class MainWindow(QMainWindow):
         else:
             self.apply_light_theme()
 
+        self.initialize_embedded_player()
+        self.update_stream_status_overlay_geometry()
+
     def toggle_dark_theme(self, state):
         if state == Qt.Checked:
             self.apply_dark_theme()
@@ -779,6 +878,223 @@ class MainWindow(QMainWindow):
             return style.standardIcon(QStyle.SP_ArrowBack)
         else:
             return QIcon()
+
+    def initialize_embedded_player(self):
+        try:
+            self.embedded_vlc_player = VLCPlayer(silent=False)
+            self.embedded_vlc_player.player.set_hwnd(int(self.video_frame.winId()))
+            self.set_stream_status("Ready")
+        except Exception as e:
+            self.embedded_vlc_player = None
+            logging.error(f"Failed to initialize embedded VLC player: {e}")
+            self.set_stream_status("Player initialization failed", is_error=True)
+
+    def set_stream_status(self, text, auto_hide_ms=None, is_error=False, show_on_status_page=False):
+        if self.stream_status_hide_timer.isActive():
+            self.stream_status_hide_timer.stop()
+
+        if is_error or show_on_status_page:
+            try:
+                if is_error and self.embedded_vlc_player:
+                    self.embedded_vlc_player.stop()
+            except Exception as e:
+                logging.debug(f"Failed to stop VLC while showing error status: {e}")
+
+            self.status_page_label.setText(text)
+            self.video_stack.setCurrentWidget(self.status_page)
+            self.stream_status_label.hide()
+            return
+
+        self.video_stack.setCurrentWidget(self.video_page)
+
+        self.stream_status_label.setText(text)
+        self.stream_status_label.show()
+        self.update_stream_status_overlay_geometry()
+
+        if auto_hide_ms is not None:
+            self.stream_status_hide_timer.start(auto_hide_ms)
+
+    def update_stream_status_overlay_geometry(self):
+        margin = 20
+        self.stream_status_label.setGeometry(
+            margin,
+            margin,
+            max(0, self.video_frame.width() - (2 * margin)),
+            max(0, self.video_frame.height() - (2 * margin)),
+        )
+        self.stream_status_label.raise_()
+
+    def prepare_stream_url(self, stream_url):
+        if not stream_url:
+            return ""
+
+        known_prefixes = ["ffmpeg ", "ffrt3 "]
+        cleaned_url = stream_url.strip()
+        for prefix in known_prefixes:
+            if cleaned_url.lower().startswith(prefix.lower()):
+                cleaned_url = cleaned_url[len(prefix):].strip()
+                logging.debug(f"Removed prefix '{prefix}' from stream_url. New URL: {cleaned_url}")
+
+        return cleaned_url
+
+    def play_in_embedded_player(self, stream_url):
+        cleaned_url = self.prepare_stream_url(stream_url)
+        if not cleaned_url:
+            QMessageBox.critical(self, "Error", "Invalid stream URL.")
+            self.set_stream_status("Invalid stream URL", is_error=True)
+            return
+
+        logging.debug(f"Playing in embedded VLC with URL: {cleaned_url}")
+
+        try:
+            if self.embedded_vlc_player is None:
+                self.initialize_embedded_player()
+
+            if self.embedded_vlc_player is None:
+                raise RuntimeError("Embedded VLC player is not available.")
+
+            try:
+                self.embedded_vlc_player.stop()
+            except Exception as e:
+                logging.debug(f"Could not stop previous playback before starting new stream: {e}")
+
+            self.stream_status_elapsed_ms = 0
+            self.set_stream_status("Loading stream...", show_on_status_page=True)
+
+            self.embedded_vlc_player.player.set_hwnd(int(self.video_frame.winId()))
+            user_agent = "Lavf53.32.100"
+            media = self.embedded_vlc_player.instance.media_new(cleaned_url, f":http-user-agent={user_agent}")
+            self.embedded_vlc_player.player.set_media(media)
+            self.embedded_vlc_player.play()
+
+            if self.stream_status_timer.isActive():
+                self.stream_status_timer.stop()
+            self.stream_status_timer.start(self.stream_status_interval_ms)
+
+            self.current_stream_url = cleaned_url
+            self.open_standalone_button.setEnabled(True)
+        except Exception as e:
+            logging.error(f"Error playing embedded VLC stream: {e}")
+            if self.stream_status_timer.isActive():
+                self.stream_status_timer.stop()
+            self.set_stream_status("Failed to start stream", is_error=True)
+            QMessageBox.critical(self, "Error", f"Failed to play stream in embedded player: {e}")
+
+    def update_stream_status(self):
+        if not self.embedded_vlc_player:
+            self.set_stream_status("Player unavailable", is_error=True)
+            self.stream_status_timer.stop()
+            return
+
+        try:
+            if self.embedded_vlc_player.is_playing():
+                self.set_stream_status("Playing", auto_hide_ms=1200)
+                self.stream_status_timer.stop()
+                return
+
+            if self.embedded_vlc_player.playback_failed():
+                self.set_stream_status("Stream failed", is_error=True)
+                self.stream_status_timer.stop()
+                return
+
+            self.stream_status_elapsed_ms += self.stream_status_interval_ms
+            if self.stream_status_elapsed_ms >= self.stream_status_timeout_ms:
+                self.set_stream_status("Loading failed (timeout)", is_error=True)
+                self.stream_status_timer.stop()
+            else:
+                self.set_stream_status("Loading stream...", show_on_status_page=True)
+        except Exception as e:
+            logging.error(f"Error while checking stream status: {e}")
+            self.set_stream_status("Stream status check failed", is_error=True)
+            self.stream_status_timer.stop()
+
+    def open_current_stream_in_standalone(self):
+        if not self.current_stream_url:
+            QMessageBox.information(self, "Info", "No current playback stream to open.")
+            return
+        self.launch_media_player(self.current_stream_url)
+
+    def get_current_tab_name(self):
+        return self.tab_widget.tabText(self.tab_widget.currentIndex())
+
+    def get_playable_row_indices(self, tab_name):
+        tab_info = self.tabs.get(tab_name)
+        if not tab_info:
+            return []
+
+        playable_types = {"channel", "vod", "episode"}
+        playlist_model = tab_info["playlist_model"]
+        rows = []
+        for row in range(playlist_model.rowCount()):
+            item = playlist_model.item(row)
+            if not item:
+                continue
+            item_type = item.data(Qt.UserRole + 1)
+            if item_type in playable_types:
+                rows.append(row)
+        return rows
+
+    def play_row_in_tab(self, tab_name, row):
+        tab_info = self.tabs.get(tab_name)
+        if not tab_info:
+            return
+
+        playlist_model = tab_info["playlist_model"]
+        playlist_view = tab_info["playlist_view"]
+        item = playlist_model.item(row)
+        if not item:
+            return
+
+        item_data = item.data(Qt.UserRole)
+        item_type = item.data(Qt.UserRole + 1)
+        if item_type not in ["channel", "vod", "episode"]:
+            return
+
+        model_index = playlist_model.index(row, 0)
+        playlist_view.setCurrentIndex(model_index)
+        playlist_view.scrollTo(model_index, QAbstractItemView.PositionAtCenter)
+
+        self.current_play_tab = tab_name
+        self.current_play_row = row
+        self.play_channel(item_data)
+
+    def play_previous_channel(self):
+        tab_name = self.current_play_tab or self.get_current_tab_name()
+        rows = self.get_playable_row_indices(tab_name)
+        if not rows:
+            QMessageBox.information(self, "Info", "No playable items in the current list.")
+            return
+
+        current_row = self.current_play_row
+        if current_row is None:
+            current_row = self.tabs[tab_name]["playlist_view"].currentIndex().row()
+
+        if current_row in rows:
+            current_pos = rows.index(current_row)
+            target_row = rows[(current_pos - 1) % len(rows)]
+        else:
+            target_row = rows[-1]
+
+        self.play_row_in_tab(tab_name, target_row)
+
+    def play_next_channel(self):
+        tab_name = self.current_play_tab or self.get_current_tab_name()
+        rows = self.get_playable_row_indices(tab_name)
+        if not rows:
+            QMessageBox.information(self, "Info", "No playable items in the current list.")
+            return
+
+        current_row = self.current_play_row
+        if current_row is None:
+            current_row = self.tabs[tab_name]["playlist_view"].currentIndex().row()
+
+        if current_row in rows:
+            current_pos = rows.index(current_row)
+            target_row = rows[(current_pos + 1) % len(rows)]
+        else:
+            target_row = rows[0]
+
+        self.play_row_in_tab(tab_name, target_row)
 
     def handle_stalker_progress(self, progress: int):
         logging.debug(f"Progress update received: {progress}%")
@@ -896,6 +1212,17 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         self.save_settings()
+        if self.stream_status_timer.isActive():
+            self.stream_status_timer.stop()
+        if self.stream_status_hide_timer.isActive():
+            self.stream_status_hide_timer.stop()
+        if self.embedded_vlc_player:
+            try:
+                self.embedded_vlc_player.stop()
+                self.embedded_vlc_player.player.release()
+                self.embedded_vlc_player.instance.release()
+            except Exception as e:
+                logging.debug(f"Error while releasing embedded VLC player: {e}")
         event.accept()
 
     def save_settings(self):
@@ -1373,10 +1700,14 @@ class MainWindow(QMainWindow):
 
         elif item_type == "episode":
             logging.debug(f"Playing episode: {item_data.get('name')}")
+            self.current_play_tab = current_tab
+            self.current_play_row = index.row()
             self.play_channel(item_data)
             # Do not update progress bar during playback
         elif item_type in ["channel", "vod"]:
             logging.debug(f"Playing channel/VOD: {item_data.get('name')}")
+            self.current_play_tab = current_tab
+            self.current_play_row = index.row()
             self.play_channel(item_data)
             # Do not update progress bar during playback
         else:
@@ -1822,7 +2153,7 @@ class MainWindow(QMainWindow):
                 try:
                     stream_url = self.portal.get_episode_stream_url(movie_id, season_id, episode_id)
                     if stream_url:
-                        self.launch_media_player(stream_url)
+                        self.play_in_embedded_player(stream_url)
                     else:
                         QMessageBox.critical(self, "Error", "Failed to get stream URL from Stalker portal.")
                 except Exception as e:
@@ -1835,7 +2166,7 @@ class MainWindow(QMainWindow):
                 try:
                     stream_url = self.portal.get_stream_link(channel)
                     if stream_url:
-                        self.launch_media_player(stream_url)
+                        self.play_in_embedded_player(stream_url)
                     else:
                         QMessageBox.critical(self, "Error", "Failed to get stream URL from Stalker portal.")
                 except Exception as e:
@@ -1906,7 +2237,7 @@ class MainWindow(QMainWindow):
                         if cmd.lower().startswith("ffmpeg"):
                             cmd = cmd[6:].strip()
                         stream_url = cmd_value
-                        self.launch_media_player(stream_url)
+                        self.play_in_embedded_player(stream_url)
                     else:
                         logging.error("Stream URL not found in the response.")
                         QMessageBox.critical(
@@ -1922,7 +2253,7 @@ class MainWindow(QMainWindow):
                 if cmd.startswith("ffmpeg "):
                     cmd = cmd[len("ffmpeg "):]
                     logging.debug("Stripped 'ffmpeg ' prefix from cmd.")
-                self.launch_media_player(cmd)
+                self.play_in_embedded_player(cmd)
 
         elif item_type in ["vod", "episode"]:
             try:
@@ -1986,7 +2317,7 @@ class MainWindow(QMainWindow):
                     cmd_value = ' '.join(cmd_value.split(' ')[1:])
 
                     stream_url = cmd_value
-                    self.launch_media_player(stream_url)
+                    self.play_in_embedded_player(stream_url)
                 else:
                     logging.error("Stream URL not found in the response.")
                     QMessageBox.critical(
@@ -2033,16 +2364,7 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, lambda: playlist_view.verticalScrollBar().setValue(scroll_position))
 
     def launch_media_player(self, stream_url):
-        # List of known prefixes to strip
-        known_prefixes = ["ffmpeg ", "ffrt3 "]  # Add any other prefixes here
-
-        # Strip any known prefix
-        original_url = stream_url
-        stream_url = stream_url.strip()  # Remove extra spaces
-        for prefix in known_prefixes:
-            if stream_url.lower().startswith(prefix.lower()):
-                stream_url = stream_url[len(prefix):].strip()
-                logging.debug(f"Removed prefix '{prefix}' from stream_url. New URL: {stream_url}")
+        stream_url = self.prepare_stream_url(stream_url)
 
         # Log the final URL
         logging.debug(f"Launching media player with cleaned URL: {stream_url}")
@@ -2073,7 +2395,31 @@ class MainWindow(QMainWindow):
             )
 
     def resizeEvent(self, event):
-        pass
+        super().resizeEvent(event)
+        self.update_stream_status_overlay_geometry()
+        if self.embedded_vlc_player:
+            try:
+                self.embedded_vlc_player.player.set_hwnd(int(self.video_frame.winId()))
+            except Exception as e:
+                logging.debug(f"Failed to reattach embedded VLC video output: {e}")
+
+    def keyPressEvent(self, event):
+        focused_widget = QApplication.focusWidget()
+        if isinstance(focused_widget, (QLineEdit, QSpinBox)):
+            super().keyPressEvent(event)
+            return
+
+        if event.modifiers() == Qt.NoModifier and event.key() == Qt.Key_P:
+            self.play_previous_channel()
+            event.accept()
+            return
+
+        if event.modifiers() == Qt.NoModifier and event.key() == Qt.Key_N:
+            self.play_next_channel()
+            event.accept()
+            return
+
+        super().keyPressEvent(event)
 
     # Additional Methods (as per the original code)
     # Ensure to implement any missing methods or fix incomplete code blocks
