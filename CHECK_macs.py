@@ -94,6 +94,8 @@ def process_mac(db, url, mac):
 
 
 def normalize_status(status_value):
+    if isinstance(status_value, STATUS):
+        return status_value.value
     return (status_value or "").strip().upper()
 
 
@@ -148,11 +150,11 @@ def main():
         # Iterate through each URL and fetch its MACs
         total_urls = len(urls)
         global_status_counts = {
-            STATUS.SUCCESS: 0,
-            STATUS.LOGIN: 0,
-            STATUS.ERROR: 0,
-            STATUS.CONTENT: 0,
-            STATUS.SKIPPED: 0,
+            STATUS.SUCCESS.value: 0,
+            STATUS.LOGIN.value: 0,
+            STATUS.ERROR.value: 0,
+            STATUS.CONTENT.value: 0,
+            STATUS.SKIPPED.value: 0,
         }
         logging.info(f"Found {total_urls} URLs to process.")
         for urlCounter, url in enumerate(urls, start=1):
@@ -160,11 +162,11 @@ def main():
             url_progress_percent = (urlCounter / total_urls) * 100 if total_urls else 100
             success = None
             status_counts = {
-                STATUS.SUCCESS: 0,
-                STATUS.LOGIN: 0,
-                STATUS.ERROR: 0,
-                STATUS.CONTENT: 0,
-                STATUS.SKIPPED: 0,
+                STATUS.SUCCESS.value: 0,
+                STATUS.LOGIN.value: 0,
+                STATUS.ERROR.value: 0,
+                STATUS.CONTENT.value: 0,
+                STATUS.SKIPPED.value: 0,
             }
             logging.info(f"{Fore.CYAN}{URLPREFIX} ------------------------------------------------------------------------")
             logging.info(f"{Fore.CYAN}{URLPREFIX} ({url_progress_percent:.0f}%) {url}")
@@ -177,25 +179,27 @@ def main():
                 logging.debug(f"{Fore.YELLOW}{URLPREFIX}Known good MAC check: {mac}")
                 success, success_message, is_german, is_adult = process_mac(db, url, mac)
                 logging.debug(f"{Fore.YELLOW}{URLPREFIX}Known good MAC result: {success}")
-                if success in status_counts:
-                    status_counts[success] += 1
                 db.update_mac_status(mac_id, success, success_message, is_german, is_adult)
+                if success == STATUS.SUCCESS:
+                    logging.info(f"{Fore.GREEN}{URLPREFIX} Known good MAC result: {success} - {success_message}")
+                else:
+                    logging.info(f"{Fore.RED}{URLPREFIX} Known good MAC result: {success} - {success_message}")
 
                 # Processing the remaining MACs
                 macs = db.get_all_other_macs_by_url(url, mac_id)
             else:
                 macs = db.get_all_macs_by_url(url)
 
-            filtered_out_count = 0
             if skip_statuses:
                 original_count = len(macs)
-                macs = [
-                    macItem for macItem in macs
-                    if normalize_status(macItem.status) not in skip_statuses
-                ]
+                new_macs = []
+                for macItem in macs:
+                    if normalize_status(macItem.status) not in skip_statuses:
+                        new_macs.append(macItem)
+                    
+                macs = new_macs
                 filtered_out_count = original_count - len(macs)
                 if filtered_out_count:
-                    status_counts[STATUS.SKIPPED] += filtered_out_count
                     logging.info(
                         f"{Fore.YELLOW}{URLPREFIX} skipped by status filter: {filtered_out_count}"
                     )
@@ -208,7 +212,7 @@ def main():
                     MACPREFIX = f"{URLPREFIX} MAC[{macCounter}/{total_macs}]"
                     mac_progress_percent = (macCounter / total_macs) * 100 if total_macs else 100
                     logging.info(f"{Fore.YELLOW}{MACPREFIX} ({mac_progress_percent:.0f}%) SKIP (already working): {macItem.mac}")
-                    status_counts[STATUS.SKIPPED] += 1
+                    status_counts[STATUS.SKIPPED.value] += 1
                     db.update_mac_status(macItem.id, STATUS.SKIPPED, "")
             else:
                 max_workers = max(1, args.workers)
@@ -258,9 +262,10 @@ def main():
                             completed_macs += 1
                             mac_progress_percent = (completed_macs / total_macs) * 100 if total_macs else 100
                             color = Fore.GREEN if result_success == STATUS.SUCCESS else (Fore.YELLOW if result_success == STATUS.SKIPPED else Fore.RED)
-                            logging.info(f"{color}{MACPREFIX} ({completed_macs}/{total_macs}, {mac_progress_percent:.0f}%) -> {result_success}")
-                            if result_success in status_counts:
-                                status_counts[result_success] += 1
+                            logging.info(f"{color}{MACPREFIX} ({completed_macs}/{total_macs}, {mac_progress_percent:.0f}%) -> {result_success} - {success_message}")
+                            result_key = normalize_status(result_success)
+                            if result_key in status_counts:
+                                status_counts[result_key] += 1
                             db.update_mac_status(macItem.id, result_success, success_message, is_german, is_adult)
                             available_workers.append(worker_id)
 
@@ -273,7 +278,7 @@ def main():
                         MACPREFIX = f"{URLPREFIX} MAC[{macCounter}/{total_macs}]"
                         mac_progress_percent = (completed_macs / total_macs) * 100 if total_macs else 100
                         logging.info(f"{Fore.YELLOW}{MACPREFIX} ({completed_macs}/{total_macs}, {mac_progress_percent:.0f}%) SKIP (already working): {macItem.mac}")
-                        status_counts[STATUS.SKIPPED] += 1
+                        status_counts[STATUS.SKIPPED.value] += 1
                         db.update_mac_status(macItem.id, STATUS.SKIPPED, "")
 
             total_counted = sum(status_counts.values())
@@ -281,11 +286,11 @@ def main():
                 global_status_counts[state] += count
             logging.info(
                 f"{Fore.WHITE}{URLPREFIX} summary: "
-                f"success={status_counts[STATUS.SUCCESS]}, "
-                f"login={status_counts[STATUS.LOGIN]}, "
-                f"error={status_counts[STATUS.ERROR]}, "
-                f"content={status_counts[STATUS.CONTENT]}, "
-                f"skipped={status_counts[STATUS.SKIPPED]}, "
+                f"success={status_counts[STATUS.SUCCESS.value]}, "
+                f"login={status_counts[STATUS.LOGIN.value]}, "
+                f"error={status_counts[STATUS.ERROR.value]}, "
+                f"content={status_counts[STATUS.CONTENT.value]}, "
+                f"skipped={status_counts[STATUS.SKIPPED.value]}, "
                 f"total={total_counted}"
             )
 
@@ -300,11 +305,11 @@ def main():
     global_total_counted = sum(global_status_counts.values())
     logging.info(
         f"{Fore.WHITE}GLOBAL summary: "
-        f"success={global_status_counts[STATUS.SUCCESS]}, "
-        f"login={global_status_counts[STATUS.LOGIN]}, "
-        f"error={global_status_counts[STATUS.ERROR]}, "
-        f"content={global_status_counts[STATUS.CONTENT]}, "
-        f"skipped={global_status_counts[STATUS.SKIPPED]}, "
+        f"success={global_status_counts[STATUS.SUCCESS.value]}, "
+        f"login={global_status_counts[STATUS.LOGIN.value]}, "
+        f"error={global_status_counts[STATUS.ERROR.value]}, "
+        f"content={global_status_counts[STATUS.CONTENT.value]}, "
+        f"skipped={global_status_counts[STATUS.SKIPPED.value]}, "
         f"total={global_total_counted}"
     )
     logging.info(f"Started at: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(start_time))}")

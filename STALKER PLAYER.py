@@ -851,10 +851,11 @@ class MainWindow(QMainWindow):
         with IPTV_Database() as db:
             macs = db.get_url_and_working_mac()
             if macs:
-                self.profiles = [{"name": mac.url + " - " + mac.mac + " (" 
-                                  + ("G" if mac.german else "")
-                                  + ("A" if mac.adult else "")
-                                  + ")", "url": mac.url, "mac": mac.mac} for mac in macs]
+                self.profiles = [{"name": "(" 
+                                  + ("G" if mac.german else "_")
+                                  + ("A" if mac.adult else "_") 
+                                  + ") " + mac.url + " - " + mac.mac
+                                  + "", "url": mac.url, "mac": mac.mac} for mac in macs]
             else:
                 # If no profiles found in the database, initialize with an empty list
                 self.profiles = self.settings.value("profiles", [])
