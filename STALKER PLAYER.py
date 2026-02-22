@@ -42,6 +42,7 @@ from PyQt5.QtWidgets import (
     QSplitter,
     QSizePolicy,
     QStackedWidget,
+    QToolButton,
 )
 from PyQt5.QtGui import QStandardItemModel, QStandardItem, QIcon
 from urllib.parse import quote, urlparse, urlunparse
@@ -589,19 +590,19 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central_widget)
 
         main_layout = QHBoxLayout(central_widget)
-        main_splitter = QSplitter(Qt.Horizontal)
-        main_layout.addWidget(main_splitter)
+        self.main_splitter = QSplitter(Qt.Horizontal)
+        main_layout.addWidget(self.main_splitter)
 
-        left_panel = QWidget(self)
-        left_panel.setFixedWidth(430)
-        layout = QVBoxLayout(left_panel)
-        main_splitter.addWidget(left_panel)
+        self.left_panel = QWidget(self)
+        self.left_panel.setFixedWidth(430)
+        layout = QVBoxLayout(self.left_panel)
+        self.main_splitter.addWidget(self.left_panel)
 
-        right_panel = QWidget(self)
-        right_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        right_layout = QVBoxLayout(right_panel)
+        self.right_panel = QWidget(self)
+        self.right_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        right_layout = QVBoxLayout(self.right_panel)
 
-        self.video_stack = QStackedWidget(right_panel)
+        self.video_stack = QStackedWidget(self.right_panel)
         right_layout.addWidget(self.video_stack, 1)
 
         self.video_page = QWidget(self.video_stack)
@@ -649,6 +650,25 @@ class MainWindow(QMainWindow):
         self.stream_status_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self.stream_status_label.raise_()
 
+        self.fullscreen_button = QToolButton(self.video_page)
+        self.fullscreen_button.setToolTip("Enter fullscreen")
+        self.fullscreen_button.setIcon(self.style().standardIcon(QStyle.SP_TitleBarMaxButton))
+        self.fullscreen_button.setIconSize(self.fullscreen_button.iconSize())
+        self.fullscreen_button.setAutoRaise(True)
+        self.fullscreen_button.setStyleSheet(
+            "QToolButton {"
+            "background-color: rgba(0, 0, 0, 120);"
+            "border: 1px solid rgba(255, 255, 255, 110);"
+            "border-radius: 14px;"
+            "padding: 4px;"
+            "}"
+            "QToolButton:hover {"
+            "background-color: rgba(255, 255, 255, 40);"
+            "}"
+        )
+        self.fullscreen_button.clicked.connect(self.toggle_fullscreen_playback)
+        self.fullscreen_button.raise_()
+
         playback_nav_layout = QHBoxLayout()
         self.prev_channel_button = QPushButton("Previous")
         self.prev_channel_button.clicked.connect(self.play_previous_channel)
@@ -657,18 +677,20 @@ class MainWindow(QMainWindow):
         self.next_channel_button = QPushButton("Next")
         self.next_channel_button.clicked.connect(self.play_next_channel)
         playback_nav_layout.addWidget(self.next_channel_button)
-        right_layout.addLayout(playback_nav_layout)
+        self.playback_nav_widget = QWidget(self.right_panel)
+        self.playback_nav_widget.setLayout(playback_nav_layout)
+        right_layout.addWidget(self.playback_nav_widget)
 
         self.open_standalone_button = QPushButton("Open Current in Standalone Player")
         self.open_standalone_button.setEnabled(False)
         self.open_standalone_button.clicked.connect(self.open_current_stream_in_standalone)
         right_layout.addWidget(self.open_standalone_button)
 
-        main_splitter.addWidget(right_panel)
-        main_splitter.setChildrenCollapsible(False)
-        main_splitter.setStretchFactor(0, 0)
-        main_splitter.setStretchFactor(1, 1)
-        main_splitter.setSizes([430, 770])
+        self.main_splitter.addWidget(self.right_panel)
+        self.main_splitter.setChildrenCollapsible(False)
+        self.main_splitter.setStretchFactor(0, 0)
+        self.main_splitter.setStretchFactor(1, 1)
+        self.main_splitter.setSizes([430, 770])
 
         top_layout = QVBoxLayout()
         layout.addLayout(top_layout)
@@ -799,6 +821,9 @@ class MainWindow(QMainWindow):
         self.current_stalker_thread = None
         self.current_stream_url = None
         self.embedded_vlc_player = None
+        self.is_playback_fullscreen = False
+        self.pre_fullscreen_splitter_sizes = None
+        self.pre_fullscreen_stream_status_visible = False
         self.current_play_tab = None
         self.current_play_row = None
         self.stream_status_timer = QTimer()
@@ -907,6 +932,10 @@ class MainWindow(QMainWindow):
 
         self.video_stack.setCurrentWidget(self.video_page)
 
+        if self.is_playback_fullscreen:
+            self.stream_status_label.hide()
+            return
+
         self.stream_status_label.setText(text)
         self.stream_status_label.show()
         self.update_stream_status_overlay_geometry()
@@ -916,6 +945,18 @@ class MainWindow(QMainWindow):
 
     def update_stream_status_overlay_geometry(self):
         margin = 20
+        fullscreen_button_size = 28
+        fullscreen_button_margin = 12
+        video_rect = self.video_frame.geometry()
+
+        self.fullscreen_button.setGeometry(
+            max(0, video_rect.right() - fullscreen_button_size - fullscreen_button_margin + 1),
+            max(0, video_rect.top() + fullscreen_button_margin),
+            fullscreen_button_size,
+            fullscreen_button_size,
+        )
+        self.fullscreen_button.raise_()
+
         self.stream_status_label.setGeometry(
             margin,
             margin,
@@ -923,6 +964,61 @@ class MainWindow(QMainWindow):
             max(0, self.video_frame.height() - (2 * margin)),
         )
         self.stream_status_label.raise_()
+        self.fullscreen_button.raise_()
+
+    def toggle_fullscreen_playback(self):
+        if self.isFullScreen():
+            self.exit_fullscreen_playback()
+        else:
+            self.enter_fullscreen_playback()
+
+    def enter_fullscreen_playback(self):
+        if self.is_playback_fullscreen:
+            return
+
+        self.pre_fullscreen_splitter_sizes = self.main_splitter.sizes()
+        self.pre_fullscreen_stream_status_visible = self.stream_status_label.isVisible()
+
+        self.left_panel.hide()
+        self.playback_nav_widget.hide()
+        self.open_standalone_button.hide()
+        self.stream_status_label.hide()
+        self.main_splitter.setSizes([0, max(1, self.width())])
+
+        self.showFullScreen()
+        self.is_playback_fullscreen = True
+        self.update_fullscreen_button_icon()
+        self.update_stream_status_overlay_geometry()
+
+    def exit_fullscreen_playback(self):
+        if not self.is_playback_fullscreen:
+            return
+
+        self.showNormal()
+
+        self.left_panel.show()
+        self.playback_nav_widget.show()
+        self.open_standalone_button.show()
+
+        if self.pre_fullscreen_splitter_sizes and len(self.pre_fullscreen_splitter_sizes) == 2:
+            self.main_splitter.setSizes(self.pre_fullscreen_splitter_sizes)
+        else:
+            self.main_splitter.setSizes([430, 770])
+
+        if self.video_stack.currentWidget() == self.video_page:
+            self.stream_status_label.setVisible(self.pre_fullscreen_stream_status_visible)
+
+        self.is_playback_fullscreen = False
+        self.update_fullscreen_button_icon()
+        self.update_stream_status_overlay_geometry()
+
+    def update_fullscreen_button_icon(self):
+        if self.isFullScreen():
+            self.fullscreen_button.setIcon(self.style().standardIcon(QStyle.SP_TitleBarNormalButton))
+            self.fullscreen_button.setToolTip("Exit fullscreen")
+        else:
+            self.fullscreen_button.setIcon(self.style().standardIcon(QStyle.SP_TitleBarMaxButton))
+            self.fullscreen_button.setToolTip("Enter fullscreen")
 
     def prepare_stream_url(self, stream_url):
         if not stream_url:
@@ -2407,6 +2503,16 @@ class MainWindow(QMainWindow):
         focused_widget = QApplication.focusWidget()
         if isinstance(focused_widget, (QLineEdit, QSpinBox)):
             super().keyPressEvent(event)
+            return
+
+        if event.key() == Qt.Key_Escape and self.isFullScreen():
+            self.exit_fullscreen_playback()
+            event.accept()
+            return
+
+        if event.modifiers() == Qt.NoModifier and event.key() == Qt.Key_F:
+            self.toggle_fullscreen_playback()
+            event.accept()
             return
 
         if event.modifiers() == Qt.NoModifier and event.key() == Qt.Key_P:
