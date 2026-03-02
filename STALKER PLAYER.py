@@ -43,6 +43,7 @@ from PyQt5.QtWidgets import (
     QSizePolicy,
     QStackedWidget,
     QToolButton,
+    QSlider,
 )
 from PyQt5.QtGui import QStandardItemModel, QStandardItem, QIcon
 from urllib.parse import quote, urlparse, urlunparse
@@ -60,6 +61,36 @@ logging.basicConfig(
 # Reintroduce get_token for non-stalker portals
 def get_token(session, url, mac_address):
     try:
+        retryable_status_codes = {429, 500, 502, 503, 504, 520, 521, 522, 523, 524}
+
+        def get_json_with_retry(request_url, cookies, headers, timeout=15, max_retries=3, backoff_base=0.75):
+            last_error = None
+            for attempt in range(max_retries + 1):
+                try:
+                    response = session.get(request_url, cookies=cookies, headers=headers, timeout=timeout)
+                    response.raise_for_status()
+                    return response.json()
+                except requests.HTTPError as e:
+                    status_code = e.response.status_code if e.response is not None else None
+                    is_retryable = status_code in retryable_status_codes
+                    last_error = e
+                except (requests.Timeout, requests.ConnectionError) as e:
+                    is_retryable = True
+                    last_error = e
+                except Exception as e:
+                    is_retryable = False
+                    last_error = e
+
+                if not is_retryable or attempt >= max_retries:
+                    raise last_error
+
+                delay = backoff_base * (2 ** attempt)
+                logging.warning(
+                    f"Transient request failure ({type(last_error).__name__}) for {request_url}. "
+                    f"Retrying {attempt + 1}/{max_retries} in {delay:.2f}s..."
+                )
+                time.sleep(delay)
+
         handshake_url = f"{url}/portal.php?type=stb&action=handshake&JsHttpRequest=1-xml"
         cookies = {
             "mac": mac_address,
@@ -71,9 +102,8 @@ def get_token(session, url, mac_address):
                           "AppleWebKit/533.3 (KHTML, like Gecko) "
                           "MAG200 stbapp ver: 2 rev: 250 Safari/533.3"
         }
-        response = session.get(handshake_url, cookies=cookies, headers=headers, timeout=15)
-        response.raise_for_status()
-        token = response.json().get("js", {}).get("token")
+        response_json = get_json_with_retry(handshake_url, cookies, headers, timeout=15)
+        token = response_json.get("js", {}).get("token")
         if token:
             logging.debug(f"Token retrieved: {token}")
             return token
@@ -108,6 +138,35 @@ class RequestThread(QThread):
         self.category_type = category_type
         self.category_id = category_id
         self.num_threads = num_threads
+        self.retryable_status_codes = {429, 500, 502, 503, 504, 520, 521, 522, 523, 524}
+
+    def _get_json_with_retry(self, session, request_url, cookies, headers, timeout=10, max_retries=3, backoff_base=0.75):
+        last_error = None
+        for attempt in range(max_retries + 1):
+            try:
+                response = session.get(request_url, cookies=cookies, headers=headers, timeout=timeout)
+                response.raise_for_status()
+                return response.json()
+            except requests.HTTPError as e:
+                status_code = e.response.status_code if e.response is not None else None
+                is_retryable = status_code in self.retryable_status_codes
+                last_error = e
+            except (requests.Timeout, requests.ConnectionError) as e:
+                is_retryable = True
+                last_error = e
+            except Exception as e:
+                is_retryable = False
+                last_error = e
+
+            if not is_retryable or attempt >= max_retries:
+                raise last_error
+
+            delay = backoff_base * (2 ** attempt)
+            logging.warning(
+                f"Transient request failure ({type(last_error).__name__}) for {request_url}. "
+                f"Retrying {attempt + 1}/{max_retries} in {delay:.2f}s..."
+            )
+            time.sleep(delay)
 
     def run(self):
         try:
@@ -137,9 +196,7 @@ class RequestThread(QThread):
             try:
                 profile_url = f"{url}/portal.php?type=stb&action=get_profile&JsHttpRequest=1-xml"
                 logging.debug(f"Fetching profile from {profile_url}")
-                response_profile = session.get(profile_url, cookies=cookies, headers=headers, timeout=10)
-                response_profile.raise_for_status()
-                profile_data = response_profile.json()
+                profile_data = self._get_json_with_retry(session, profile_url, cookies, headers, timeout=10)
                 logging.debug(f"Profile data: {profile_data}")
             except Exception as e:
                 logging.error(f"Error fetching profile: {e}")
@@ -148,9 +205,7 @@ class RequestThread(QThread):
             try:
                 account_info_url = f"{url}/portal.php?type=account_info&action=get_main_info&JsHttpRequest=1-xml"
                 logging.debug(f"Fetching account info from {account_info_url}")
-                response_account_info = session.get(account_info_url, cookies=cookies, headers=headers, timeout=10)
-                response_account_info.raise_for_status()
-                account_info_data = response_account_info.json()
+                account_info_data = self._get_json_with_retry(session, account_info_url, cookies, headers, timeout=10)
                 logging.debug(f"Account info data: {account_info_data}")
             except Exception as e:
                 logging.error(f"Error fetching account info: {e}")
@@ -213,9 +268,8 @@ class RequestThread(QThread):
     def get_genres(self, session, url, mac_address, token, cookies, headers):
         try:
             genres_url = f"{url}/portal.php?type=itv&action=get_genres&JsHttpRequest=1-xml"
-            response = session.get(genres_url, cookies=cookies, headers=headers, timeout=10)
-            response.raise_for_status()
-            genre_data = response.json().get("js", [])
+            response_json = self._get_json_with_retry(session, genres_url, cookies, headers, timeout=10)
+            genre_data = response_json.get("js", [])
             if genre_data:
                 genres = [
                     {
@@ -238,9 +292,8 @@ class RequestThread(QThread):
     def get_vod_categories(self, session, url, mac_address, token, cookies, headers):
         try:
             vod_url = f"{url}/portal.php?type=vod&action=get_categories&JsHttpRequest=1-xml"
-            response = session.get(vod_url, cookies=cookies, headers=headers, timeout=10)
-            response.raise_for_status()
-            categories_data = response.json().get("js", [])
+            response_json = self._get_json_with_retry(session, vod_url, cookies, headers, timeout=10)
+            categories_data = response_json.get("js", [])
             if categories_data:
                 categories = [
                     {
@@ -263,9 +316,7 @@ class RequestThread(QThread):
     def get_series_categories(self, session, url, mac_address, token, cookies, headers):
         try:
             series_url = f"{url}/portal.php?type=series&action=get_categories&JsHttpRequest=1-xml"
-            response = session.get(series_url, cookies=cookies, headers=headers, timeout=10)
-            response.raise_for_status()
-            response_json = response.json()
+            response_json = self._get_json_with_retry(session, series_url, cookies, headers, timeout=10)
             logging.debug(f"Series categories response: {response_json}")
             if not isinstance(response_json, dict) or "js" not in response_json:
                 logging.error("Unexpected response structure for series categories.")
@@ -309,9 +360,7 @@ class RequestThread(QThread):
             elif category_type == "Series":
                 initial_url = f"{url}/portal.php?type=series&action=get_ordered_list&category={category_id}&p=0&JsHttpRequest=1-xml"
 
-            response = session.get(initial_url, cookies=cookies, headers=headers, timeout=10)
-            response.raise_for_status()
-            response_json = response.json()
+            response_json = self._get_json_with_retry(session, initial_url, cookies, headers, timeout=10)
             total_items = response_json.get("js", {}).get("total_items", 0)
             items_per_page = len(response_json.get("js", {}).get("data", []))
             total_pages = (total_items + items_per_page - 1) // items_per_page if items_per_page else 1
@@ -372,9 +421,11 @@ class RequestThread(QThread):
             return []
 
     def fetch_channel_page(self, session, channels_url, cookies, headers, category_type):
-        response = session.get(channels_url, cookies=cookies, headers=headers, timeout=10)
-        response.raise_for_status()
-        response_json = response.json()
+        try:
+            response_json = self._get_json_with_retry(session, channels_url, cookies, headers, timeout=10)
+        except Exception as e:
+            logging.warning(f"Skipping failed page after retries: {channels_url} ({e})")
+            return []
         page_channels = response_json.get("js", {}).get("data", [])
         for ch in page_channels:
             ch["item_type"] = ("series" if category_type == "Series"
@@ -450,6 +501,165 @@ class StalkerRequestThread(QThread):
             logging.error(f"StalkerRequestThread encountered an error: {e}")
             self.stalker_error.emit(str(e))
             self.stalker_update_progress.emit(0)  # Reset progress on error
+
+
+class StreamResolveThread(QThread):
+    stream_resolved = pyqtSignal(int, str, object, float)
+    stream_error = pyqtSignal(int, str)
+
+    def __init__(
+        self,
+        request_id,
+        channel,
+        hostname_input,
+        portal,
+        session,
+        base_url,
+        mac_address,
+        token,
+        token_timestamp,
+    ):
+        super().__init__()
+        self.request_id = request_id
+        self.channel = channel
+        self.hostname_input = hostname_input
+        self.portal = portal
+        self.session = session
+        self.base_url = base_url
+        self.mac_address = mac_address
+        self.token = token
+        self.token_timestamp = token_timestamp
+
+    def _is_token_valid(self):
+        return bool(self.token and self.token_timestamp and (time.time() - self.token_timestamp) < 600)
+
+    def _ensure_token(self):
+        if self._is_token_valid():
+            return self.token, self.token_timestamp
+
+        refreshed_token = get_token(self.session, self.base_url, self.mac_address)
+        if not refreshed_token:
+            raise RuntimeError("Failed to retrieve token. Please check your MAC address and URL.")
+        return refreshed_token, time.time()
+
+    def _resolve_non_stalker_stream(self, channel, item_type):
+        cmd = channel.get("cmd")
+        if not cmd:
+            raise RuntimeError("No command found for the selected item.")
+
+        if item_type == "channel":
+            needs_create_link = "/ch/" in cmd and cmd.endswith("_")
+            if needs_create_link:
+                token, token_timestamp = self._ensure_token()
+                cmd_encoded = quote(cmd)
+                cookies = {
+                    "mac": self.mac_address,
+                    "stb_lang": "en",
+                    "timezone": "Europe/London",
+                    "token": token,
+                }
+                headers = {
+                    "User-Agent": "Mozilla/5.0 (QtEmbedded; U; Linux; C) "
+                    "AppleWebKit/533.3 (KHTML, like Gecko) "
+                    "MAG200 stbapp ver: 2 rev: 250 Safari/533.3",
+                    "Authorization": f"Bearer {token}",
+                }
+                create_link_url = (
+                    f"{self.base_url}/portal.php?type=itv&action=create_link&cmd={cmd_encoded}&JsHttpRequest=1-xml"
+                )
+                response = self.session.get(
+                    create_link_url,
+                    cookies=cookies,
+                    headers=headers,
+                    timeout=10,
+                )
+                response.raise_for_status()
+                json_response = response.json()
+                cmd_value = json_response.get("js", {}).get("cmd")
+                if not cmd_value:
+                    raise RuntimeError("Stream URL not found in the response.")
+                return cmd_value, token, token_timestamp
+
+            if cmd.startswith("ffmpeg "):
+                cmd = cmd[len("ffmpeg "):]
+            return cmd, self.token, self.token_timestamp
+
+        if item_type in ["vod", "episode"]:
+            token, token_timestamp = self._ensure_token()
+            cmd_encoded = quote(cmd)
+            cookies = {
+                "mac": self.mac_address,
+                "stb_lang": "en",
+                "timezone": "Europe/London",
+                "token": token,
+            }
+            headers = {
+                "User-Agent": "Mozilla/5.0 (QtEmbedded; U; Linux; C) "
+                "AppleWebKit/533.3 (KHTML, like Gecko) "
+                "MAG200 stbapp ver: 2 rev: 250 Safari/533.3",
+                "Authorization": f"Bearer {token}",
+            }
+            if item_type == "episode":
+                episode_number = channel.get("episode_number")
+                if episode_number is None:
+                    raise RuntimeError("Episode number is missing.")
+                create_link_url = (
+                    f"{self.base_url}/portal.php?type=vod&action=create_link&cmd={cmd_encoded}&series={episode_number}&JsHttpRequest=1-xml"
+                )
+            else:
+                create_link_url = (
+                    f"{self.base_url}/portal.php?type=vod&action=create_link&cmd={cmd_encoded}&JsHttpRequest=1-xml"
+                )
+
+            response = self.session.get(
+                create_link_url,
+                cookies=cookies,
+                headers=headers,
+                timeout=10,
+            )
+            response.raise_for_status()
+            json_response = response.json()
+            cmd_value = json_response.get("js", {}).get("cmd")
+            if not cmd_value:
+                raise RuntimeError("Stream URL not found in the response.")
+
+            cmd_parts = cmd_value.split(" ")
+            stream_url = " ".join(cmd_parts[1:]) if len(cmd_parts) > 1 else cmd_value
+            return stream_url, token, token_timestamp
+
+        raise RuntimeError(f"Unknown item type: {item_type}")
+
+    def run(self):
+        try:
+            item_type = self.channel.get("item_type", "channel").lower()
+            is_stalker = "/stalker_portal/" in self.hostname_input and self.portal
+
+            if is_stalker:
+                if item_type == "episode":
+                    movie_id = self.channel.get("movie_id")
+                    season_id = self.channel.get("season_id")
+                    episode_id = self.channel.get("id")
+                    if not (movie_id and season_id and episode_id):
+                        raise RuntimeError("Incomplete episode information.")
+                    stream_url = self.portal.get_episode_stream_url(movie_id, season_id, episode_id)
+                else:
+                    stream_url = self.portal.get_stream_link(self.channel)
+
+                if not stream_url:
+                    raise RuntimeError("Failed to get stream URL from Stalker portal.")
+
+                self.stream_resolved.emit(self.request_id, stream_url, self.token, self.token_timestamp or 0.0)
+                return
+
+            stream_url, updated_token, updated_token_timestamp = self._resolve_non_stalker_stream(self.channel, item_type)
+            self.stream_resolved.emit(
+                self.request_id,
+                stream_url,
+                updated_token,
+                updated_token_timestamp or 0.0,
+            )
+        except Exception as e:
+            self.stream_error.emit(self.request_id, str(e))
 
 
 class ProfileDialog(QDialog):
@@ -574,6 +784,25 @@ class ProfileDialog(QDialog):
         profile = item.data(Qt.UserRole)
         self.profile_selected.emit(profile)
         self.accept()
+class ClickableSlider(QSlider):
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            if self.orientation() == Qt.Horizontal:
+                span = max(1, self.width() - 1)
+                click_position = max(0, min(event.x(), span))
+            else:
+                span = max(1, self.height() - 1)
+                click_position = max(0, min(self.height() - event.y(), span))
+
+            value = QStyle.sliderValueFromPosition(
+                self.minimum(),
+                self.maximum(),
+                click_position,
+                span,
+            )
+            self.setValue(value)
+
+        super().mousePressEvent(event)
 
 
 class MainWindow(QMainWindow):
@@ -615,6 +844,14 @@ class MainWindow(QMainWindow):
         self.video_frame.setStyleSheet("background-color: black;")
         self.video_frame.setMinimumSize(420, 320)
         video_page_layout.addWidget(self.video_frame)
+
+        self.playback_progress_slider = ClickableSlider(Qt.Horizontal, self.video_page)
+        self.playback_progress_slider.setRange(0, 1000)
+        self.playback_progress_slider.setValue(0)
+        self.playback_progress_slider.setEnabled(False)
+        self.playback_progress_slider.sliderPressed.connect(self.on_playback_slider_pressed)
+        self.playback_progress_slider.sliderReleased.connect(self.on_playback_slider_released)
+        video_page_layout.addWidget(self.playback_progress_slider)
 
         self.status_page = QWidget(self.video_stack)
         self.status_page.setStyleSheet("background-color: black;")
@@ -677,6 +914,18 @@ class MainWindow(QMainWindow):
         self.next_channel_button = QPushButton("Next")
         self.next_channel_button.clicked.connect(self.play_next_channel)
         playback_nav_layout.addWidget(self.next_channel_button)
+
+        seek_step_label = QLabel("Seek (s):")
+        playback_nav_layout.addWidget(seek_step_label)
+
+        self.seek_step_input = QSpinBox()
+        self.seek_step_input.setMinimum(1)
+        self.seek_step_input.setMaximum(600)
+        self.seek_step_input.setValue(10)
+        self.seek_step_input.setFixedWidth(70)
+        playback_nav_layout.addWidget(self.seek_step_input)
+
+        playback_nav_layout.addStretch()
         self.playback_nav_widget = QWidget(self.right_panel)
         self.playback_nav_widget.setLayout(playback_nav_layout)
         right_layout.addWidget(self.playback_nav_widget)
@@ -826,6 +1075,9 @@ class MainWindow(QMainWindow):
         self.pre_fullscreen_stream_status_visible = False
         self.current_play_tab = None
         self.current_play_row = None
+        self.stream_request_counter = 0
+        self.latest_stream_request_id = 0
+        self.stream_resolve_threads = {}
         self.stream_status_timer = QTimer()
         self.stream_status_timer.timeout.connect(self.update_stream_status)
         self.stream_status_interval_ms = 500
@@ -834,6 +1086,10 @@ class MainWindow(QMainWindow):
         self.stream_status_hide_timer = QTimer()
         self.stream_status_hide_timer.setSingleShot(True)
         self.stream_status_hide_timer.timeout.connect(self.stream_status_label.hide)
+        self.playback_progress_timer = QTimer()
+        self.playback_progress_timer.timeout.connect(self.update_playback_progress)
+        self.playback_progress_timer.start(500)
+        self.is_user_seeking = False
 
         # Add a layout for bottom controls
         bottom_layout = QHBoxLayout()
@@ -1054,6 +1310,8 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 logging.debug(f"Could not stop previous playback before starting new stream: {e}")
 
+            self.reset_playback_progress()
+
             self.stream_status_elapsed_ms = 0
             self.set_stream_status("Loading stream...", show_on_status_page=True)
 
@@ -1075,6 +1333,75 @@ class MainWindow(QMainWindow):
                 self.stream_status_timer.stop()
             self.set_stream_status("Failed to start stream", is_error=True)
             QMessageBox.critical(self, "Error", f"Failed to play stream in embedded player: {e}")
+
+    def reset_playback_progress(self):
+        self.is_user_seeking = False
+        self.playback_progress_slider.setEnabled(False)
+        self.playback_progress_slider.blockSignals(True)
+        self.playback_progress_slider.setValue(0)
+        self.playback_progress_slider.blockSignals(False)
+
+    def update_playback_progress(self):
+        if not self.embedded_vlc_player or self.is_user_seeking:
+            return
+
+        try:
+            length_ms = self.embedded_vlc_player.get_length()
+            current_ms = self.embedded_vlc_player.get_time()
+            if length_ms and length_ms > 0 and current_ms >= 0:
+                progress_value = int((current_ms / length_ms) * 1000)
+                progress_value = max(0, min(1000, progress_value))
+
+                if not self.playback_progress_slider.isEnabled():
+                    self.playback_progress_slider.setEnabled(True)
+
+                self.playback_progress_slider.blockSignals(True)
+                self.playback_progress_slider.setValue(progress_value)
+                self.playback_progress_slider.blockSignals(False)
+            else:
+                if self.playback_progress_slider.isEnabled():
+                    self.reset_playback_progress()
+        except Exception as e:
+            logging.debug(f"Failed to update playback progress: {e}")
+
+    def on_playback_slider_pressed(self):
+        self.is_user_seeking = True
+
+    def on_playback_slider_released(self):
+        if not self.embedded_vlc_player:
+            self.is_user_seeking = False
+            return
+
+        try:
+            length_ms = self.embedded_vlc_player.get_length()
+            if length_ms and length_ms > 0:
+                target_ms = int((self.playback_progress_slider.value() / 1000) * length_ms)
+                self.embedded_vlc_player.set_time(target_ms)
+        except Exception as e:
+            logging.debug(f"Failed to seek playback position: {e}")
+        finally:
+            self.is_user_seeking = False
+
+    def seek_relative(self, seconds_delta):
+        if not self.embedded_vlc_player:
+            return
+
+        try:
+            current_ms = self.embedded_vlc_player.get_time()
+            length_ms = self.embedded_vlc_player.get_length()
+
+            if current_ms < 0:
+                return
+
+            target_ms = current_ms + int(seconds_delta * 1000)
+            if length_ms and length_ms > 0:
+                target_ms = max(0, min(target_ms, length_ms))
+            else:
+                target_ms = max(0, target_ms)
+
+            self.embedded_vlc_player.set_time(target_ms)
+        except Exception as e:
+            logging.debug(f"Failed to seek playback by keyboard: {e}")
 
     def update_stream_status(self):
         if not self.embedded_vlc_player:
@@ -1300,6 +1627,7 @@ class MainWindow(QMainWindow):
         self.mac_input.setText(self.settings.value("mac_address", ""))
         self.media_player_input.setText(self.settings.value("media_player", ""))
         self.threads_input.setValue(int(self.settings.value("num_threads", 5)))
+        self.seek_step_input.setValue(int(self.settings.value("seek_step_seconds", 10)))
         always_on_top = self.settings.value("always_on_top", False, type=bool)
         self.always_on_top_checkbox.setChecked(always_on_top)
         if always_on_top:
@@ -1312,6 +1640,8 @@ class MainWindow(QMainWindow):
             self.stream_status_timer.stop()
         if self.stream_status_hide_timer.isActive():
             self.stream_status_hide_timer.stop()
+        if self.playback_progress_timer.isActive():
+            self.playback_progress_timer.stop()
         if self.embedded_vlc_player:
             try:
                 self.embedded_vlc_player.stop()
@@ -1326,6 +1656,7 @@ class MainWindow(QMainWindow):
         self.settings.setValue("mac_address", self.mac_input.text())
         self.settings.setValue("media_player", self.media_player_input.text())
         self.settings.setValue("num_threads", self.threads_input.value())
+        self.settings.setValue("seek_step_seconds", self.seek_step_input.value())
         self.settings.setValue("always_on_top", self.always_on_top_checkbox.isChecked())
         self.save_profiles()
 
@@ -2219,216 +2550,66 @@ class MainWindow(QMainWindow):
             return True
         return False
 
-    def play_channel(self, channel):
-        """
-        Plays a selected channel, movie, or episode.
+    def _cleanup_stream_resolve_thread(self, request_id):
+        self.stream_resolve_threads.pop(request_id, None)
 
-        For Stalker Portal episodes, it uses the StalkerPortal's get_episode_stream_url method.
-        For non-Stalker content, it continues to use the existing 'cmd' based logic.
-        """
-        hostname_input = self.hostname_input.text().strip()
+    def _handle_stream_resolved(self, request_id, stream_url, updated_token, updated_token_timestamp):
+        if updated_token:
+            self.token = updated_token
+            if updated_token_timestamp:
+                self.token_timestamp = updated_token_timestamp
 
-        # Determine if the current portal is a Stalker Portal
-        is_stalker = "/stalker_portal/" in hostname_input and hasattr(self, 'portal') and self.portal
-
-        item_type = channel.get("item_type", "channel").lower()
-
-        if is_stalker:
-            if item_type == "episode":
-                # Extract necessary IDs for Stalker episodes
-                movie_id = channel.get("movie_id")
-                season_id = channel.get("season_id")
-                episode_id = channel.get("id")
-
-                if not (movie_id and season_id and episode_id):
-                    logging.error("Missing movie_id, season_id, or episode_id for Stalker episode.")
-                    QMessageBox.critical(self, "Error", "Incomplete episode information.")
-                    return
-
-                # Fetch the stream URL using StalkerPortal
-                try:
-                    stream_url = self.portal.get_episode_stream_url(movie_id, season_id, episode_id)
-                    if stream_url:
-                        self.play_in_embedded_player(stream_url)
-                    else:
-                        QMessageBox.critical(self, "Error", "Failed to get stream URL from Stalker portal.")
-                except Exception as e:
-                    logging.error(f"Error fetching stream URL from StalkerPortal: {e}")
-                    QMessageBox.critical(self, "Error", f"Failed to get stream URL: {e}")
-                return  # Exit after handling Stalker episode
-
-            else:
-                # Handle other Stalker content types (VOD, Channel)
-                try:
-                    stream_url = self.portal.get_stream_link(channel)
-                    if stream_url:
-                        self.play_in_embedded_player(stream_url)
-                    else:
-                        QMessageBox.critical(self, "Error", "Failed to get stream URL from Stalker portal.")
-                except Exception as e:
-                    logging.error(f"Error fetching stream URL from StalkerPortal: {e}")
-                    QMessageBox.critical(self, "Error", f"Failed to get stream URL: {e}")
-                return  # Exit after handling Stalker content
-
-        # Non-Stalker logic
-        cmd = channel.get("cmd")
-        if not cmd:
-            logging.error(f"No command found for channel/episode: {channel}")
-            QMessageBox.critical(self, "Error", "No command found for the selected item.")
+        if request_id != self.latest_stream_request_id:
+            logging.debug(
+                f"Ignoring stale stream resolve result for request_id={request_id}; latest={self.latest_stream_request_id}"
+            )
             return
 
-        item_type = item_type  # Already set to lowercase earlier
+        self.play_in_embedded_player(stream_url)
 
-        if item_type == "channel":
-            needs_create_link = False
-            if "/ch/" in cmd and cmd.endswith("_"):
-                needs_create_link = True
-
-            if needs_create_link:
-                try:
-                    session = self.session
-                    url = self.base_url
-                    mac_address = self.mac_address
-
-                    # Refresh token if needed
-                    if not self.is_token_valid():
-                        self.token = get_token(session, url, mac_address)
-                        self.token_timestamp = time.time()
-                        if not self.token:
-                            QMessageBox.critical(
-                                self,
-                                "Error",
-                                "Failed to retrieve token. Please check your MAC address and URL.",
-                            )
-                            return
-
-                    token = self.token
-
-                    cmd_encoded = quote(cmd)
-                    cookies = {
-                        "mac": mac_address,
-                        "stb_lang": "en",
-                        "timezone": "Europe/London",
-                        "token": token,  # Include token in cookies
-                    }
-                    headers = {
-                        "User-Agent": "Mozilla/5.0 (QtEmbedded; U; Linux; C) "
-                                      "AppleWebKit/533.3 (KHTML, like Gecko) "
-                                      "MAG200 stbapp ver: 2 rev: 250 Safari/533.3",
-                        "Authorization": f"Bearer {token}",
-                    }
-                    create_link_url = f"{url}/portal.php?type=itv&action=create_link&cmd={cmd_encoded}&JsHttpRequest=1-xml"
-                    logging.debug(f"Create link URL: {create_link_url}")
-                    response = session.get(
-                        create_link_url,
-                        cookies=cookies,
-                        headers=headers,
-                        timeout=10,
-                    )
-                    response.raise_for_status()
-                    json_response = response.json()
-                    logging.debug(f"Create link response: {json_response}")
-                    cmd_value = json_response.get("js", {}).get("cmd")
-                    if cmd_value:
-                        if cmd.lower().startswith("ffmpeg"):
-                            cmd = cmd[6:].strip()
-                        stream_url = cmd_value
-                        self.play_in_embedded_player(stream_url)
-                    else:
-                        logging.error("Stream URL not found in the response.")
-                        QMessageBox.critical(
-                            self, "Error", "Stream URL not found in the response."
-                        )
-                except Exception as e:
-                    logging.error(f"Error creating stream link: {e}")
-                    QMessageBox.critical(
-                        self, "Error", f"Error creating stream link: {e}"
-                    )
-            else:
-                # Strip 'ffmpeg ' prefix if present
-                if cmd.startswith("ffmpeg "):
-                    cmd = cmd[len("ffmpeg "):]
-                    logging.debug("Stripped 'ffmpeg ' prefix from cmd.")
-                self.play_in_embedded_player(cmd)
-
-        elif item_type in ["vod", "episode"]:
-            try:
-                session = self.session
-                url = self.base_url
-                mac_address = self.mac_address
-
-                # Refresh token if needed
-                if not self.is_token_valid():
-                    self.token = get_token(session, url, mac_address)
-                    self.token_timestamp = time.time()
-                    if not self.token:
-                        QMessageBox.critical(
-                            self,
-                            "Error",
-                            "Failed to retrieve token. Please check your MAC address and URL.",
-                        )
-                        return
-
-                token = self.token
-
-                cmd_encoded = quote(cmd)
-                cookies = {
-                    "mac": mac_address,
-                    "stb_lang": "en",
-                    "timezone": "Europe/London",
-                    "token": token,  # Include token in cookies
-                }
-                headers = {
-                    "User-Agent": "Mozilla/5.0 (QtEmbedded; U; Linux; C) "
-                                  "AppleWebKit/533.3 (KHTML, like Gecko) "
-                                  "MAG200 stbapp ver: 2 rev: 250 Safari/533.3",
-                    "Authorization": f"Bearer {token}",
-                }
-                if item_type == "episode":
-                    episode_number = channel.get("episode_number")
-                    if episode_number is None:
-                        logging.error("Episode number is missing.")
-                        QMessageBox.critical(
-                            self,
-                            "Error",
-                            "Episode number is missing."
-                        )
-                        return
-                    create_link_url = f"{url}/portal.php?type=vod&action=create_link&cmd={cmd_encoded}&series={episode_number}&JsHttpRequest=1-xml"
-                else:
-                    create_link_url = f"{url}/portal.php?type=vod&action=create_link&cmd={cmd_encoded}&JsHttpRequest=1-xml"
-                logging.debug(f"Create link URL: {create_link_url}")
-                response = session.get(
-                    create_link_url,
-                    cookies=cookies,
-                    headers=headers,
-                    timeout=10,
-                )
-                response.raise_for_status()
-                json_response = response.json()
-                logging.debug(f"Create link response: {json_response}")
-                cmd_value = json_response.get("js", {}).get("cmd")
-                if cmd_value:
-                    # Remove the first word (e.g., 'ffmpeg') and join the rest
-                    cmd_value = ' '.join(cmd_value.split(' ')[1:])
-
-                    stream_url = cmd_value
-                    self.play_in_embedded_player(stream_url)
-                else:
-                    logging.error("Stream URL not found in the response.")
-                    QMessageBox.critical(
-                        self, "Error", "Stream URL not found in the response."
-                    )
-            except Exception as e:
-                logging.error(f"Error creating stream link: {e}")
-                QMessageBox.critical(
-                    self, "Error", f"Error creating stream link: {e}"
-                )
-        else:
-            logging.error(f"Unknown item type: {item_type}")
-            QMessageBox.critical(
-                self, "Error", f"Unknown item type: {item_type}"
+    def _handle_stream_resolve_error(self, request_id, error_message):
+        if request_id != self.latest_stream_request_id:
+            logging.debug(
+                f"Ignoring stale stream resolve error for request_id={request_id}; latest={self.latest_stream_request_id}"
             )
+            return
+
+        logging.error(f"Error resolving stream link: {error_message}")
+        self.set_stream_status("Stream resolve failed", is_error=True)
+        QMessageBox.critical(self, "Error", f"Failed to resolve stream URL: {error_message}")
+
+    def _start_stream_resolution(self, channel):
+        self.stream_request_counter += 1
+        request_id = self.stream_request_counter
+        self.latest_stream_request_id = request_id
+
+        hostname_input = self.hostname_input.text().strip()
+        thread = StreamResolveThread(
+            request_id=request_id,
+            channel=channel,
+            hostname_input=hostname_input,
+            portal=self.portal if hasattr(self, "portal") else None,
+            session=self.session,
+            base_url=self.base_url,
+            mac_address=self.mac_address,
+            token=self.token,
+            token_timestamp=self.token_timestamp,
+        )
+        thread.stream_resolved.connect(self._handle_stream_resolved)
+        thread.stream_error.connect(self._handle_stream_resolve_error)
+        thread.finished.connect(lambda rid=request_id: self._cleanup_stream_resolve_thread(rid))
+        self.stream_resolve_threads[request_id] = thread
+        thread.start()
+
+    def play_channel(self, channel):
+        """
+        Starts playback for a selected channel, movie, or episode.
+
+        Stream URL resolution is performed asynchronously so UI/channel switching
+        stays responsive while previous requests are still loading.
+        """
+        self.set_stream_status("Resolving stream...", show_on_status_page=True)
+        self._start_stream_resolution(channel)
 
     def update_series_view(self, tab_name, scroll_position=0):
         tab_info = self.tabs[tab_name]
@@ -2522,6 +2703,16 @@ class MainWindow(QMainWindow):
 
         if event.modifiers() == Qt.NoModifier and event.key() == Qt.Key_N:
             self.play_next_channel()
+            event.accept()
+            return
+
+        if event.modifiers() == Qt.NoModifier and event.key() == Qt.Key_Left:
+            self.seek_relative(-self.seek_step_input.value())
+            event.accept()
+            return
+
+        if event.modifiers() == Qt.NoModifier and event.key() == Qt.Key_Right:
+            self.seek_relative(self.seek_step_input.value())
             event.accept()
             return
 
