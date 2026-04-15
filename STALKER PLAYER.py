@@ -10,6 +10,7 @@ import concurrent.futures  # Added for parallel execution
 from stalker import StalkerPortal
 from Library import IPTV_Database, VLCPlayer
 from PyQt5.QtCore import (
+    QObject,
     QSettings,
     Qt,
     QThread,
@@ -44,6 +45,7 @@ from PyQt5.QtWidgets import (
     QStackedWidget,
     QToolButton,
     QSlider,
+    QTextEdit,
 )
 from PyQt5.QtGui import QStandardItemModel, QStandardItem, QIcon
 from urllib.parse import quote, urlparse, urlunparse
@@ -805,6 +807,23 @@ class ClickableSlider(QSlider):
         super().mousePressEvent(event)
 
 
+class LogEmitter(QObject):
+    log_message = pyqtSignal(str)
+
+
+class GuiLogHandler(logging.Handler):
+    def __init__(self, emitter):
+        super().__init__()
+        self.emitter = emitter
+
+    def emit(self, record):
+        try:
+            message = self.format(record)
+            self.emitter.log_message.emit(message)
+        except Exception:
+            self.handleError(record)
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -823,7 +842,7 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(self.main_splitter)
 
         self.left_panel = QWidget(self)
-        self.left_panel.setFixedWidth(430)
+        self.left_panel.setMinimumWidth(300)
         layout = QVBoxLayout(self.left_panel)
         self.main_splitter.addWidget(self.left_panel)
 
@@ -831,8 +850,16 @@ class MainWindow(QMainWindow):
         self.right_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         right_layout = QVBoxLayout(self.right_panel)
 
-        self.video_stack = QStackedWidget(self.right_panel)
-        right_layout.addWidget(self.video_stack, 1)
+        self.right_content_splitter = QSplitter(Qt.Horizontal, self.right_panel)
+        right_layout.addWidget(self.right_content_splitter, 1)
+
+        self.player_container = QWidget(self.right_content_splitter)
+        player_layout = QVBoxLayout(self.player_container)
+        player_layout.setContentsMargins(0, 0, 0, 0)
+        player_layout.setSpacing(6)
+
+        self.video_stack = QStackedWidget(self.player_container)
+        player_layout.addWidget(self.video_stack, 1)
 
         self.video_page = QWidget(self.video_stack)
         video_page_layout = QVBoxLayout(self.video_page)
@@ -926,14 +953,44 @@ class MainWindow(QMainWindow):
         playback_nav_layout.addWidget(self.seek_step_input)
 
         playback_nav_layout.addStretch()
-        self.playback_nav_widget = QWidget(self.right_panel)
+        self.playback_nav_widget = QWidget(self.player_container)
         self.playback_nav_widget.setLayout(playback_nav_layout)
-        right_layout.addWidget(self.playback_nav_widget)
+        player_layout.addWidget(self.playback_nav_widget)
 
         self.open_standalone_button = QPushButton("Open Current in Standalone Player")
         self.open_standalone_button.setEnabled(False)
         self.open_standalone_button.clicked.connect(self.open_current_stream_in_standalone)
-        right_layout.addWidget(self.open_standalone_button)
+        player_layout.addWidget(self.open_standalone_button)
+
+        self.logs_container = QWidget(self.right_content_splitter)
+        logs_layout = QVBoxLayout(self.logs_container)
+        logs_layout.setContentsMargins(0, 0, 0, 0)
+        logs_layout.setSpacing(6)
+
+        self.log_label = QLabel("Logs")
+        logs_layout.addWidget(self.log_label)
+
+        self.log_view = QTextEdit(self.logs_container)
+        self.log_view.setReadOnly(True)
+        logs_layout.addWidget(self.log_view, 1)
+
+        self.right_content_splitter.addWidget(self.player_container)
+        self.right_content_splitter.addWidget(self.logs_container)
+        self.right_content_splitter.setChildrenCollapsible(False)
+        self.right_content_splitter.setStretchFactor(0, 3)
+        self.right_content_splitter.setStretchFactor(1, 2)
+        self.right_content_splitter.setSizes([620, 320])
+
+        self.log_emitter = LogEmitter()
+        self.log_emitter.log_message.connect(self.append_log_message)
+        self.gui_log_handler = GuiLogHandler(self.log_emitter)
+        self.gui_log_handler.setLevel(logging.INFO)
+        self.gui_log_handler.setFormatter(
+            logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+        )
+        root_logger = logging.getLogger()
+        if not any(isinstance(handler, GuiLogHandler) for handler in root_logger.handlers):
+            root_logger.addHandler(self.gui_log_handler)
 
         self.main_splitter.addWidget(self.right_panel)
         self.main_splitter.setChildrenCollapsible(False)
@@ -1073,6 +1130,9 @@ class MainWindow(QMainWindow):
         self.is_playback_fullscreen = False
         self.pre_fullscreen_splitter_sizes = None
         self.pre_fullscreen_stream_status_visible = False
+        self.pre_fullscreen_logs_visible = True
+        self.pre_fullscreen_main_handle_width = self.main_splitter.handleWidth()
+        self.pre_fullscreen_right_handle_width = self.right_content_splitter.handleWidth()
         self.current_play_tab = None
         self.current_play_row = None
         self.stream_request_counter = 0
@@ -1179,7 +1239,7 @@ class MainWindow(QMainWindow):
                 if is_error and self.embedded_vlc_player:
                     self.embedded_vlc_player.stop()
             except Exception as e:
-                logging.debug(f"Failed to stop VLC while showing error status: {e}")
+                logging.warning(f"Failed to stop VLC while showing error status: {e}")
 
             self.status_page_label.setText(text)
             self.video_stack.setCurrentWidget(self.status_page)
@@ -1234,11 +1294,17 @@ class MainWindow(QMainWindow):
 
         self.pre_fullscreen_splitter_sizes = self.main_splitter.sizes()
         self.pre_fullscreen_stream_status_visible = self.stream_status_label.isVisible()
+        self.pre_fullscreen_logs_visible = self.logs_container.isVisible()
+        self.pre_fullscreen_main_handle_width = self.main_splitter.handleWidth()
+        self.pre_fullscreen_right_handle_width = self.right_content_splitter.handleWidth()
 
         self.left_panel.hide()
         self.playback_nav_widget.hide()
         self.open_standalone_button.hide()
+        self.logs_container.hide()
         self.stream_status_label.hide()
+        self.main_splitter.setHandleWidth(0)
+        self.right_content_splitter.setHandleWidth(0)
         self.main_splitter.setSizes([0, max(1, self.width())])
 
         self.showFullScreen()
@@ -1255,6 +1321,9 @@ class MainWindow(QMainWindow):
         self.left_panel.show()
         self.playback_nav_widget.show()
         self.open_standalone_button.show()
+        self.logs_container.setVisible(self.pre_fullscreen_logs_visible)
+        self.main_splitter.setHandleWidth(self.pre_fullscreen_main_handle_width)
+        self.right_content_splitter.setHandleWidth(self.pre_fullscreen_right_handle_width)
 
         if self.pre_fullscreen_splitter_sizes and len(self.pre_fullscreen_splitter_sizes) == 2:
             self.main_splitter.setSizes(self.pre_fullscreen_splitter_sizes)
@@ -1296,7 +1365,7 @@ class MainWindow(QMainWindow):
             self.set_stream_status("Invalid stream URL", is_error=True)
             return
 
-        logging.debug(f"Playing in embedded VLC with URL: {cleaned_url}")
+        logging.info(f"Playing in embedded VLC with URL: {cleaned_url}")
 
         try:
             if self.embedded_vlc_player is None:
@@ -1308,7 +1377,7 @@ class MainWindow(QMainWindow):
             try:
                 self.embedded_vlc_player.stop()
             except Exception as e:
-                logging.debug(f"Could not stop previous playback before starting new stream: {e}")
+                logging.warning(f"Could not stop previous playback before starting new stream: {e}")
 
             self.reset_playback_progress()
 
@@ -1636,6 +1705,8 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         self.save_settings()
+        logging.getLogger().removeHandler(self.gui_log_handler)
+        self.gui_log_handler.close()
         if self.stream_status_timer.isActive():
             self.stream_status_timer.stop()
         if self.stream_status_hide_timer.isActive():
@@ -1650,6 +1721,9 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 logging.debug(f"Error while releasing embedded VLC player: {e}")
         event.accept()
+
+    def append_log_message(self, message):
+        self.log_view.append(message)
 
     def save_settings(self):
         self.settings.setValue("hostname", self.hostname_input.text())

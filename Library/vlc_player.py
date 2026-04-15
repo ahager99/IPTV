@@ -48,6 +48,8 @@ class VLCPlayer:
                     "--log-verbose=1",
                 ]
             )
+
+        #logging.info("Embedded VLC player initialized.")
         
         self.player = self.instance.media_player_new()
         if media_path:
@@ -68,12 +70,14 @@ class VLCPlayer:
         self.player.set_media(media)
 
     def play(self):
+        #logging.info("VLC playback started.")
         self.player.play()
 
     def pause(self):
         self.player.pause()
 
     def stop(self):
+        #logging.info("VLC playback stopped.")
         self.player.stop()
 
     def is_playing(self):
@@ -97,10 +101,10 @@ class VLCPlayer:
     # check if playback failed
     def playback_failed(self): 
         if self.player.get_state() == vlc.State.Error:
-            logging.debug("Playback failed: VLC encountered an error.")
+            logging.error("Playback failed: VLC encountered an error.")
             return True
         elif self.player.get_state() == vlc.State.Ended:
-            logging.debug("Playback ended unexpected.")
+            #logging.warning("Playback ended unexpectedly.")
             return True
         return False
 

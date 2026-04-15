@@ -294,7 +294,7 @@ class STK_Genre:
 
     def is_german(self):
         return self.name.startswith(("DE:", "DE ", "|DE|", "DE|", "GERMANY", "ALEMANHA")) or \
-                "GERMANY" in self.name
+                "GERMANY" in self.name or "DEUTSCHLAND" in self.name
     
     def is_austrian(self):
         return self.name.startswith(("AT:", "AT ", "|AT|", "AT|", "AUSTRIA")) or \
