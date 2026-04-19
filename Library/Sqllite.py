@@ -1,11 +1,21 @@
 import sqlite3
 from collections import namedtuple
+from datetime import datetime
 
 from Library.Settings import STATUS, Settings
 
 
 
 class IPTV_Database:
+
+    @staticmethod
+    def _current_timestamp():
+        return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    def _column_exists(self, table_name, column_name):
+        cursor = self.conn.cursor()
+        cursor.execute(f"PRAGMA table_info({table_name})")
+        return any(row[1] == column_name for row in cursor.fetchall())
 
     def __namedtuple_factory(self, cursor, row):
         fields = [col[0] for col in cursor.description]
@@ -43,6 +53,7 @@ class IPTV_Database:
                 error TEXT,
                 adult BOOLEAN,
                 german BOOLEAN,
+                last_updated TEXT,
                 failed INTEGER DEFAULT 0,
                 FOREIGN KEY(url_id) REFERENCES urls(id),
                 UNIQUE(url_id, mac)
@@ -71,6 +82,8 @@ class IPTV_Database:
                 UNIQUE(url)
             )
         """)
+        if not self._column_exists("macs", "last_updated"):
+            self.conn.execute("ALTER TABLE macs ADD COLUMN last_updated TEXT")
         self.conn.commit()
 
 
@@ -126,13 +139,14 @@ class IPTV_Database:
             failed = self.get_failed_attempts(mac_id) + 1
         
         status_value = status.value if status is not None else None
+        last_updated = self._current_timestamp()
 
         cursor = self.conn.cursor()
         cursor.execute("""
             UPDATE macs
-            SET status = ?, error = ?, german = ?, adult = ?, failed = ?
+            SET status = ?, error = ?, german = ?, adult = ?, failed = ?, last_updated = ?
             WHERE id = ?
-        """, (status_value, error, german, adult, failed, mac_id, ))
+        """, (status_value, error, german, adult, failed, last_updated, mac_id, ))
         self.conn.commit()
 
     # Get all MACs for a given URL order by expiration date descending
@@ -142,7 +156,7 @@ class IPTV_Database:
 
         cursor = self.conn.cursor()
         cursor.execute("""
-            SELECT macs.id, macs.mac, macs.expiration, macs.status, macs.error, macs.adult, macs.german, macs.failed
+            SELECT macs.id, macs.mac, macs.expiration, macs.status, macs.error, macs.adult, macs.german, macs.failed, macs.last_updated
             FROM macs
             JOIN urls ON macs.url_id = urls.id
             WHERE urls.url = ?
@@ -158,7 +172,7 @@ class IPTV_Database:
 
         cursor = self.conn.cursor()
         cursor.execute("""
-            SELECT macs.id, macs.mac, macs.expiration, macs.status, macs.error, macs.adult, macs.german, macs.failed
+            SELECT macs.id, macs.mac, macs.expiration, macs.status, macs.error, macs.adult, macs.german, macs.failed, macs.last_updated
             FROM macs
             JOIN urls ON macs.url_id = urls.id
             WHERE urls.url = ?
@@ -175,7 +189,7 @@ class IPTV_Database:
 
         cursor = self.conn.cursor()
         cursor.execute("""
-            SELECT macs.id, macs.mac, macs.expiration, macs.status, macs.error, macs.adult, macs.german
+            SELECT macs.id, macs.mac, macs.expiration, macs.status, macs.error, macs.adult, macs.german, macs.last_updated
             FROM macs
             JOIN urls ON macs.url_id = urls.id
             WHERE urls.url = ?
@@ -200,19 +214,17 @@ class IPTV_Database:
 
     def get_newest_working_mac_for_url(self, url):
         cursor = self.conn.cursor()
-        # Status constants
-
         cursor.execute("""
             SELECT macs.id
             FROM macs
             JOIN urls ON macs.url_id = urls.id
-            WHERE macs.id IN (
-            SELECT MAX(id)
-            FROM macs
             WHERE macs.status = ?
-            GROUP BY url_id
-            )
             AND urls.url = ?
+            ORDER BY
+                CASE WHEN macs.last_updated IS NULL THEN 1 ELSE 0 END,
+                macs.last_updated DESC,
+                macs.id DESC
+            LIMIT 1
         """, (STATUS.SUCCESS.value, url))
 
         result = cursor.fetchone()
@@ -225,26 +237,30 @@ class IPTV_Database:
     # get mac by id
     def get_mac_by_id(self, mac_id):
         cursor = self.conn.cursor()
-        cursor.execute("SELECT macs.id, macs.mac, macs.expiration, macs.status, macs.error, macs.adult, macs.german FROM macs WHERE id = ?", (mac_id,))
+        cursor.execute("SELECT macs.id, macs.mac, macs.expiration, macs.status, macs.error, macs.adult, macs.german, macs.last_updated FROM macs WHERE id = ?", (mac_id,))
         return cursor.fetchone()
 
     # Get for each URL the newest MAC with status = 1
     def get_url_and_newest_working_mac(self):
         cursor = self.conn.cursor()
-        # Status constants
-
-        cursor.execute(f"""
-            SELECT urls.url, macs.mac, macs.expiration, macs.german, macs.adult
+        cursor.execute("""
+            SELECT urls.url, macs.mac, macs.expiration, macs.german, macs.adult, macs.last_updated
             FROM macs
             JOIN urls ON macs.url_id = urls.id
-            WHERE macs.id IN (
-            SELECT MAX(id)
-            FROM macs
             WHERE macs.status = ?
-            GROUP BY url_id
+            AND macs.id = (
+                SELECT candidate.id
+                FROM macs AS candidate
+                WHERE candidate.url_id = macs.url_id
+                AND candidate.status = ?
+                ORDER BY
+                    CASE WHEN candidate.last_updated IS NULL THEN 1 ELSE 0 END,
+                    candidate.last_updated DESC,
+                    candidate.id DESC
+                LIMIT 1
             )
             ORDER BY urls.url
-        """, (STATUS.SUCCESS.value,))
+        """, (STATUS.SUCCESS.value, STATUS.SUCCESS.value))
         return cursor.fetchall()
     
     # Get for each URL the working MACs
@@ -258,6 +274,23 @@ class IPTV_Database:
             JOIN urls ON macs.url_id = urls.id
             WHERE macs.status = ?
             ORDER BY urls.url, macs.mac
+        """, (STATUS.SUCCESS.value,))
+        return cursor.fetchall()
+
+    # Get all SUCCESS MACs sorted by newest update first
+    def get_all_success_macs_by_update_date(self):
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT urls.url, macs.mac, macs.expiration, macs.german, macs.adult, macs.last_updated
+            FROM macs
+            JOIN urls ON macs.url_id = urls.id
+            WHERE macs.status = ?
+            AND macs.last_updated IS NOT NULL
+            AND TRIM(macs.last_updated) != ''
+            ORDER BY
+                CASE WHEN macs.last_updated IS NULL THEN 1 ELSE 0 END,
+                macs.last_updated DESC,
+                macs.id DESC
         """, (STATUS.SUCCESS.value,))
         return cursor.fetchall()
 
@@ -289,10 +322,11 @@ class IPTV_Database:
             url_id = self.insert_url(url)
         
         status_value = status.value if status is not None else None
+        last_updated = self._current_timestamp()
         
         self.conn.execute(
-            "INSERT INTO macs (url_id, mac, expiration, status, error, german, adult) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (url_id, mac, expiration, status_value, error, german, adult)
+            "INSERT INTO macs (url_id, mac, expiration, status, error, german, adult, last_updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (url_id, mac, expiration, status_value, error, german, adult, last_updated)
         )
         self.conn.commit()
 

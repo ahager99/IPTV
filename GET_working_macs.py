@@ -12,7 +12,7 @@ logging.basicConfig(level=logging.INFO, handlers=[logging.FileHandler("working_m
 db = IPTV_Database()
 
 # Create table header
-header = f"{'URL':60} | {'MAC':17} | {'Expiration':12} | {'German':6} | {'Adult':5}"
+header = f"{'URL':60} | {'MAC':17} | {'Expiration':12} | {'German':6} | {'Adult':5} | {'Last Update':19}"
 
 logging.info("")
 logging.info('#' * len(header))
@@ -24,8 +24,8 @@ logging.info(header)
 logging.info('-' * len(header))
 
 # Print each row
-for url, mac, expiration, german, adult in working_macs:
-    logging.info(f"{url[:60]:60} | {mac:17} | {str(expiration):12} | {str(german):6} | {str(adult):5}")
+for url, mac, expiration, german, adult, last_updated in working_macs:
+    logging.info(f"{url[:60]:60} | {mac:17} | {str(expiration):12} | {str(german):6} | {str(adult):5} | {str(last_updated):19}")
 
 # Get amount of working compared to toal URLs in the database
 all_urls = db.get_all_urls()

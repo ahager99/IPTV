@@ -99,6 +99,25 @@ def normalize_status(status_value):
     return (status_value or "").strip().upper()
 
 
+def log_run_settings(args, skip_statuses):
+    logging.info("------------------------------------------------")
+    logging.info("Run settings:")
+    logging.info(f"  url filter: {args.url if args.url else 'ALL'}")
+    logging.info(f"  process all MACs: {args.process_all}")
+    logging.info(f"  workers: {max(1, args.workers)}")
+    logging.info(f"  vlc workers: {max(1, args.vlc_workers)}")
+    logging.info(f"  skip existing statuses: {', '.join(sorted(skip_statuses)) if skip_statuses else 'none'}")
+    logging.info(f"  db path: {Settings.DB_PATH}")
+    logging.info(f"  max failed status attempts: {Settings.MAX_FAILED_STATUS_ATTEMPTS}")
+    logging.info(f"  vlc semaphore timeout seconds: {Settings.VLC_SEMAPHORE_TIMEOUT_SECONDS}")
+    logging.info(f"  vlc playback check attempts: {Settings.VLC_PLAYBACK_CHECK_ATTEMPTS}")
+    logging.info(f"  vlc playback check interval seconds: {Settings.VLC_PLAYBACK_CHECK_INTERVAL_SECONDS}")
+    logging.info(f"  verbose subprocess output: {Settings.VERBOSE_SUBPROCESS_OUTPUT}")
+    logging.info(f"  log level: {logging.getLevelName(Settings.LOG_LEVEL)}")
+    logging.info(f"  log format: {Settings.LOG_FORMAT}")
+    logging.info("------------------------------------------------")
+
+
 def main():
     init(autoreset=True)  # Initialize colorama
 
@@ -125,6 +144,8 @@ def main():
         skip_statuses.add(STATUS.CONTENT.value)
     if skip_statuses:
         logging.info(f"Skipping MACs with existing status: {', '.join(sorted(skip_statuses))}")
+
+    log_run_settings(args, skip_statuses)
 
     # Remember start time
     start_time = time.time()

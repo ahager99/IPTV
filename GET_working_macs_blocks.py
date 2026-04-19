@@ -44,7 +44,7 @@ def main():
     working_macs = db.get_url_and_newest_working_mac()
 
     # Print each entry as a block
-    for index, (url, mac, expiration, german, adult) in enumerate(working_macs, 1):
+    for index, (url, mac, expiration, german, adult, last_updated) in enumerate(working_macs, 1):
         logging.info(f"Entry #{index}")
         logging.info("-" * 80)
         logging.info(f"URL:        {url}")
@@ -52,6 +52,7 @@ def main():
         logging.info(f"Expiration: {expiration}")
         logging.info(f"German:     {german}")
         logging.info(f"Adult:      {adult}")
+        logging.info(f"Last Update:{' ' if last_updated else ''}{last_updated}")
         logging.info("=" * 80)
         logging.info("")
         logging.info("All working MACs for this URL:")
@@ -61,7 +62,7 @@ def main():
             status = normalize_status(mac_entry[3])
             if status in excluded_statuses:
                 continue
-            logging.info(f"  - mac: {mac_entry[1]}, expiration: {mac_entry[2]}, status: {mac_entry[3]}, failed: {mac_entry[7]}")
+            logging.info(f"  - mac: {mac_entry[1]}, expiration: {mac_entry[2]}, status: {mac_entry[3]}, failed: {mac_entry[7]}, last_updated: {mac_entry[8]}")
             visible_count += 1
 
         if visible_count == 0:
