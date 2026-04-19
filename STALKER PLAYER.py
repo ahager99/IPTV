@@ -952,6 +952,13 @@ class MainWindow(QMainWindow):
         self.seek_step_input.setFixedWidth(70)
         playback_nav_layout.addWidget(self.seek_step_input)
 
+        self.show_stream_link_button = QPushButton("Copy Link")
+        self.show_stream_link_button.setEnabled(False)
+        self.show_stream_link_button.setFixedWidth(90)
+        self.show_stream_link_button.setFixedHeight(26)
+        self.show_stream_link_button.clicked.connect(self.copy_current_stream_link)
+        playback_nav_layout.addWidget(self.show_stream_link_button)
+
         playback_nav_layout.addStretch()
         self.playback_nav_widget = QWidget(self.player_container)
         self.playback_nav_widget.setLayout(playback_nav_layout)
@@ -1301,6 +1308,7 @@ class MainWindow(QMainWindow):
         self.left_panel.hide()
         self.playback_nav_widget.hide()
         self.open_standalone_button.hide()
+        self.show_stream_link_button.hide()
         self.logs_container.hide()
         self.stream_status_label.hide()
         self.main_splitter.setHandleWidth(0)
@@ -1321,6 +1329,7 @@ class MainWindow(QMainWindow):
         self.left_panel.show()
         self.playback_nav_widget.show()
         self.open_standalone_button.show()
+        self.show_stream_link_button.show()
         self.logs_container.setVisible(self.pre_fullscreen_logs_visible)
         self.main_splitter.setHandleWidth(self.pre_fullscreen_main_handle_width)
         self.right_content_splitter.setHandleWidth(self.pre_fullscreen_right_handle_width)
@@ -1363,6 +1372,9 @@ class MainWindow(QMainWindow):
         if not cleaned_url:
             QMessageBox.critical(self, "Error", "Invalid stream URL.")
             self.set_stream_status("Invalid stream URL", is_error=True)
+            self.current_stream_url = None
+            self.open_standalone_button.setEnabled(False)
+            self.show_stream_link_button.setEnabled(False)
             return
 
         logging.info(f"Playing in embedded VLC with URL: {cleaned_url}")
@@ -1396,10 +1408,14 @@ class MainWindow(QMainWindow):
 
             self.current_stream_url = cleaned_url
             self.open_standalone_button.setEnabled(True)
+            self.show_stream_link_button.setEnabled(True)
         except Exception as e:
             logging.error(f"Error playing embedded VLC stream: {e}")
             if self.stream_status_timer.isActive():
                 self.stream_status_timer.stop()
+            self.current_stream_url = None
+            self.open_standalone_button.setEnabled(False)
+            self.show_stream_link_button.setEnabled(False)
             self.set_stream_status("Failed to start stream", is_error=True)
             QMessageBox.critical(self, "Error", f"Failed to play stream in embedded player: {e}")
 
@@ -1505,6 +1521,13 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Info", "No current playback stream to open.")
             return
         self.launch_media_player(self.current_stream_url)
+
+    def copy_current_stream_link(self):
+        if not self.current_stream_url:
+            QMessageBox.information(self, "Info", "No current playback stream available.")
+            return
+        QApplication.clipboard().setText(self.current_stream_url)
+        self.set_stream_status("Link copied", auto_hide_ms=900)
 
     def get_current_tab_name(self):
         return self.tab_widget.tabText(self.tab_widget.currentIndex())
